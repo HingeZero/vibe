@@ -1,0 +1,126 @@
+name: HingeZero VIBE cloud benchmark
+
+on:
+  push:
+    branches:
+      - hingezero-vibe-cloud-ci
+    paths:
+      - .github/workflows/hingezero-vibe-cloud.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hingezero-vibe-cloud
+  cancel-in-progress: false
+
+jobs:
+  vibe:
+    name: VIBE yi-128-ip recall@100 (GitHub runner)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMBA_NUM_THREADS: "1"
+      HINGEZERO_NATIVE_LIBRARY: ${{ runner.temp }}/libhingezero.so
+      PYTHONUNBUFFERED: "1"
+      PYTHONHASHSEED: "0"
+    steps:
+      - name: Checkout exact submitted VIBE adapter
+        uses: actions/checkout@v4
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install benchmark dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            numpy==2.4.4 \
+            faiss-cpu==1.14.3 \
+            h5py==3.16.0 \
+            numba==0.65.1 \
+            psutil==7.2.2 \
+            polars==1.37.1 \
+            tqdm
+          python -c 'import faiss, numpy, numba, h5py; print("faiss:", faiss.__version__, "numpy:", numpy.__version__)'
+
+      - name: Compile native HingeZero core from fixed public commit
+        run: |
+          git clone --quiet https://github.com/HingeZero/big-ann-benchmarks.git "${{ runner.temp }}/hz-source"
+          git -C "${{ runner.temp }}/hz-source" checkout --detach 1fc8c5540f689421d8577ac7915c8b0ebbd81491
+          test "$(git -C "${{ runner.temp }}/hz-source" rev-parse HEAD)" = "1fc8c5540f689421d8577ac7915c8b0ebbd81491"
+          g++ -O3 -std=c++17 -fopenmp -fPIC -shared -DNDEBUG -ffp-contract=off \
+            "${{ runner.temp }}/hz-source/benchmark/algorithms/hingezero_cpp_v3/native.cpp" \
+            -o "$HINGEZERO_NATIVE_LIBRARY"
+          ls -lh "$HINGEZERO_NATIVE_LIBRARY"
+          python -c 'from vibe.algorithms.hingezero.module import _native; print("Native ABI:", _native().hz_abi_version())'
+
+      - name: Run deterministic native correctness smoke test
+        run: python verification/smoke_hingezero.py
+
+      - name: Execute official VIBE runner (one benchmark core)
+        run: |
+          python run.py \
+            --local --force --runs 1 \
+            --dataset yi-128-ip \
+            --algorithm hingezero \
+            --count 100 --parallelism 1
+          python - <<'PY'
+          import h5py
+          from pathlib import Path
+          files=list(Path('results/yi-128-ip/100/hingezero').glob('*.hdf5'))
+          assert files, 'No official VIBE HDF5 result was generated'
+          groups=0
+          for f in files:
+              with h5py.File(f) as data:
+                  groups+=len(data.keys())
+          assert groups==6, f'Expected 6 completed VIBE query configurations, found {groups}'
+          print('Validated VIBE HDF5 configuration groups:', groups)
+          PY
+
+      - name: Compute official VIBE recall and QPS summary
+        run: |
+          python export_results.py --parallelism 1 --skip-pca-mahalanobis
+          python - <<'PY'
+          import polars as pl
+          from pathlib import Path
+          file=Path('results/summary.parquet')
+          assert file.exists(), 'VIBE summary not generated'
+          scores=pl.read_parquet(file).filter(pl.col('algorithm') == 'hingezero')
+          assert scores.height==6, f'Expected 6 score rows, got {scores.height}'
+          scores=scores.sort('qps',descending=True)
+          print(scores.select(['dataset','recall','qps','build_time','index_size','params']))
+          lines=['## HingeZero VIBE — GitHub-hosted author run',
+                 '',
+                 'Dataset: `yi-128-ip`; metric: inner product; k=100; 1 CPU core.',
+                 '',
+                 '**Not a VIBE organizer-certified leaderboard result.**',
+                 '',
+                 '| Recall@100 | QPS | Build (s) | Index size (KiB, USS delta) |',
+                 '|---:|---:|---:|---:|']
+          for row in scores.to_dicts():
+              lines.append(f"| {row['recall']:.5f} | {row['qps']:.2f} | {row['build_time']:.2f} | {row['index_size']:.0f} |")
+          lines.extend(['','Raw results and summary files are attached as artifacts.'])
+          Path('results/HINGEZERO_VIBE_REPORT.md').write_text('\n'.join(lines)+'\n')
+          with open(__import__('os').environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('\n'.join(lines)+'\n')
+          PY
+
+      - name: Upload raw results and score report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hingezero-vibe-yi128-results
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            results/**/*.hdf5
+            results/summary.parquet
+            results/HINGEZERO_VIBE_REPORT.md
+            vibe.log
