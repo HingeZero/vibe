@@ -1,0 +1,18 @@
+Bootstrap: localimage
+From: base.sif
+
+%post
+  set -eu
+  micromamba install -y -q -c conda-forge -c pytorch python=3.12 faiss-cpu=1.14.3
+  micromamba clean --all --yes
+  # Pin the exact published C++ v3 kernel; compile without -march=native.
+  git clone https://github.com/HingeZero/big-ann-benchmarks.git /tmp/hingezero-src
+  git -C /tmp/hingezero-src checkout --detach 1fc8c5540f689421d8577ac7915c8b0ebbd81491
+  mkdir -p /opt/hingezero
+  cp /tmp/hingezero-src/benchmark/algorithms/hingezero_cpp_v3/native.cpp /opt/hingezero/native.cpp
+  g++ -O3 -std=c++17 -fopenmp -fPIC -shared -DNDEBUG -ffp-contract=off \
+      /opt/hingezero/native.cpp -o /opt/hingezero/libhingezero.so
+  rm -rf /tmp/hingezero-src
+
+%environment
+  export HINGEZERO_NATIVE_LIBRARY=/opt/hingezero/libhingezero.so

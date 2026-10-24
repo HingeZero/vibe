@@ -268,6 +268,7 @@ Deprecated datasets will remain available, but their benchmark results will not 
 | [Glass](https://github.com/zilliztech/pyglass) | git+d2296ec |
 | [HNSW-RaBitQ](https://github.com/VectorDB-NTU/RaBitQ-Library) | 0.3.7 |
 | [HNSW](https://github.com/nmslib/hnswlib) | 0.8.0 |
+| [HingeZero C++ v3 (FAISS-assisted)](https://github.com/HingeZero/big-ann-benchmarks) | git+1fc8c554 (native core) |
 | [IVF (Faiss)](https://github.com/facebookresearch/faiss) | 1.14.3 |
 | [IVF-PQ (Faiss)](https://github.com/facebookresearch/faiss) | 1.14.3 |
 | [IVF-RaBitQ](https://github.com/VectorDB-NTU/RaBitQ-Library) | 0.3.7 |
