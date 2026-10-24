@@ -25,7 +25,7 @@ jobs:
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       NUMBA_NUM_THREADS: "1"
-      HINGEZERO_NATIVE_LIBRARY: ${{ runner.temp }}/libhingezero.so
+      HINGEZERO_NATIVE_LIBRARY: /tmp/libhingezero.so
       PYTHONUNBUFFERED: "1"
       PYTHONHASHSEED: "0"
     steps:
