@@ -67,7 +67,7 @@ class HingeZeroCpp20(BaseANN):
         self.handle = None
         self.count = self.dimension = 0
         self.root = None
-        self.steps = 8 if mode == "refined" else 0
+        self.steps = 8 if mode in ("refined", "anchored") else 0
         self.refinement_ms = self.scan_ms = self.witness_count = self.queries = 0
         self.source_map = {}
 
@@ -288,7 +288,7 @@ class HingeZeroCpp20(BaseANN):
 
     def get_additional(self):
         return {"engine":"C++20 full-bank HingeZero witness/recall",
-            "mode":self.mode,"anchoring":(0.05 if self.mode=="anchored" else None),"binary_source_included":True,
+            "mode":self.mode,"anchoring":(0.05 if self.mode=="anchored" else 0.0),"binary_source_included":True,
             "float32_bank":True,"bipolar_1b_data":False,
             "witness_checks":int(self.witness_count),
             "scan_ms_total":float(self.scan_ms),
