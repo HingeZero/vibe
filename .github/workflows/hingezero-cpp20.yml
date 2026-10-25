@@ -86,5 +86,5 @@ jobs:
           path: |
             results/**/*.hdf5
             results/summary.parquet
-            results/HINGEZERO_CPP20_ZERO_REPORT.md
+            results/HINGEZERO_CPP20_TWO_STEP_REPORT.md
             vibe.log
