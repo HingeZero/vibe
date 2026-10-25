@@ -9,6 +9,8 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <array>
+#include <queue>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -120,8 +122,22 @@ struct CertifiedIndex {
       pack(src,d,s,code.data()+size_t(i)*d,&residual_norm[i],&quant_norm[i]);
     }
   }
+  void reorder(const vector<uint32_t>&order) {
+    vector<int8_t> next(code.size());
+    vector<double> ss(n),rr(n),qq(n);
+    for(uint64_t i=0;i<n;++i) {
+      const uint64_t src=order[i];
+      memcpy(next.data()+size_t(i)*d,code.data()+size_t(src)*d,size_t(d));
+      ss[i]=scales[src];
+      rr[i]=residual_norm[src];
+      qq[i]=quant_norm[src];
+    }
+    code.swap(next);
+    scales.swap(ss);
+    residual_norm.swap(rr);
+    quant_norm.swap(qq);
+  }
 };
-
 
 int64_t quant_dot_scalar(const int8_t*a,const int8_t*b,int d) {
   int64_t result=0;
@@ -186,6 +202,89 @@ QuantDot choose_quant_dot(){
   return &quant_dot_scalar;
 }
 
+struct MipsTree {
+  struct Node {
+    uint32_t begin=0,end=0;
+    int32_t left=-1,right=-1;
+    vector<double> center;
+    array<double,8> radius{};
+    double max_norm=0;
+  };
+  int d;
+  const float*bank;
+  vector<uint32_t> order;
+  vector<double> norms;
+  vector<Node> nodes;
+  MipsTree(const float*records,uint64_t n,int dimensions):
+      d(dimensions),bank(records),order(n),norms(n) {
+    iota(order.begin(),order.end(),0u);
+    for(uint64_t i=0;i<n;++i) {
+      double sum=0;
+      const float* v=bank+size_t(i)*d;
+      for(int j=0;j<d;++j)sum+=double(v[j])*v[j];
+      norms[i]=sqrt(sum);
+    }
+    nodes.reserve((n/256+2)*4);
+    build(0,uint32_t(n),0);
+  }
+  int build(uint32_t begin,uint32_t end,int depth) {
+    const int index=int(nodes.size());
+    nodes.emplace_back();
+    Node& node=nodes[index];
+    node.begin=begin;
+    node.end=end;
+    vector<double> sum(d,0),square(d,0);
+    double maxn=0;
+    for(uint32_t pos=begin;pos<end;++pos) {
+      const uint32_t id=order[pos];
+      const float *v=bank+size_t(id)*d;
+      maxn=max(maxn,norms[id]);
+      for(int j=0;j<d;++j) {
+        sum[j]+=v[j];
+        square[j]+=double(v[j])*v[j];
+      }
+    }
+    const double inverse=1.0/double(end-begin);
+    for(int j=0;j<d;++j)sum[j]*=inverse;
+    node.center=sum;
+    node.max_norm=maxn;
+    for(uint32_t pos=begin;pos<end;++pos) {
+      const float*v=bank+size_t(order[pos])*d;
+      array<double,8> er{};
+      for(int j=0;j<d;++j) {
+        const double z=double(v[j])-sum[j];
+        er[size_t(uint64_t(j)*8/uint64_t(d))]+=z*z;
+      }
+      for(int b=0;b<8;++b)node.radius[b]=max(node.radius[b],sqrt(er[b]));
+    }
+    if(end-begin<=384)return index;
+    const uint32_t mid=begin+(end-begin)/2;
+    if(depth==0 || (depth%5)==0) {
+      nth_element(order.begin()+begin,order.begin()+mid,order.begin()+end,
+        [&](uint32_t a,uint32_t b){
+          return norms[a]==norms[b]?a<b:norms[a]>norms[b];
+        });
+    } else {
+      int axis=0;
+      double variance=-1;
+      for(int j=0;j<d;++j) {
+        const double v=square[j]*inverse-sum[j]*sum[j];
+        if(v>variance){variance=v;axis=j;}
+      }
+      nth_element(order.begin()+begin,order.begin()+mid,order.begin()+end,
+        [&](uint32_t a,uint32_t b) {
+          float x=bank[size_t(a)*d+axis];
+          float y=bank[size_t(b)*d+axis];
+          return x==y?a<b:x<y;
+        });
+    }
+    const int left=build(begin,mid,depth+1);
+    const int right=build(mid,end,depth+1);
+    nodes[index].left=left;
+    nodes[index].right=right;
+    return index;
+  }
+};
 struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
@@ -198,6 +297,7 @@ struct Memory{
  size_t bytes;
  vector<Vec> field;
  unique_ptr<CertifiedIndex> certified;
+ unique_ptr<MipsTree> tree;
  Memory(const char*path,uint64_t n,int dimensions,int m,int limit):
    d(dimensions),metric(m),field_limit(limit),count(n){
   if(!path||d<1||d>65536||n<1||n>uint64_t(INT32_MAX)||
@@ -222,7 +322,11 @@ struct Memory{
       for(float x:v)if(!isfinite(x))throw runtime_error("nonfinite field");
       unit(v);field.push_back(std::move(v));
     }
-    if(metric==1)certified=make_unique<CertifiedIndex>(bank,count,d);
+    if(metric==1){
+      certified=make_unique<CertifiedIndex>(bank,count,d);
+      tree=make_unique<MipsTree>(bank,count,d);
+      certified->reorder(tree->order);
+    }
   }catch(...){
     if(mapping!=MAP_FAILED)::munmap(mapping,bytes);
     ::close(fd);mapping=MAP_FAILED;fd=-1;throw;
@@ -296,53 +400,63 @@ struct Memory{
          push_heap(heap.begin(),heap.end(),better);
       }
     };
-    if(metric==1 && certified) {
+    if(metric==1 && certified && tree) {
         const auto* idx=certified.get();
-        const auto qscale=CertifiedIndex::encoding_scale(q.data(),d);
+        const auto* t=tree.get();
+        const double scale=CertifiedIndex::encoding_scale(q.data(),d);
         vector<int8_t> qcode(d);
-        double qerr=0,qn_quant=0;
-        CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&qn_quant);
-        const double original_qnorm=nq;
-        const QuantDot approx_dot=choose_quant_dot();
+        double qerr=0,qnorm=0;
+        CertifiedIndex::pack(q.data(),d,scale,qcode.data(),&qerr,&qnorm);
+        const QuantDot approximate_dot=choose_quant_dot();
         const DotImpl exact_dot=select_dot_ip();
-        vector<Record> cheap_top;
-        cheap_top.reserve(k);
-        vector<double> bound(count);
-        const auto approx_consider=[&](Record rec) {
-          if(cheap_top.size()<size_t(k)){
-             cheap_top.push_back(rec);
-             push_heap(cheap_top.begin(),cheap_top.end(),better);
-          }else if(better(rec,cheap_top.front())){
-             pop_heap(cheap_top.begin(),cheap_top.end(),better);
-             cheap_top.back()=rec;
-             push_heap(cheap_top.begin(),cheap_top.end(),better);
+        array<double,8> qblock{};
+        for(int j=0;j<d;++j)
+          qblock[size_t(uint64_t(j)*8/uint64_t(d))]+=double(q[j])*q[j];
+        for(double &v:qblock)v=sqrt(v);
+        auto upper=[&](int node_index){
+          const auto&node=t->nodes[node_index];
+          double projected=0;
+          for(int j=0;j<d;++j)projected+=node.center[j]*q[j];
+          for(int b=0;b<8;++b)projected+=qblock[b]*node.radius[b];
+          const double capped=min(projected,node.max_norm*nq);
+          return capped+1e-6*(1.0+abs(capped));
+        };
+        struct Pending{double upper;int node;};
+        struct SmallFirst {
+          bool operator()(const Pending&a,const Pending&b)const {
+            return a.upper<b.upper;
           }
         };
-        for(uint64_t id=0;id<count;++id) {
-            const int8_t *row=idx->code.data()+size_t(id)*d;
-            const int64_t intdot=approx_dot(row,qcode.data(),d);
-            const double approximate=double(intdot)*idx->scales[id]*qscale;
-            // Cauchy bound includes record/query quantization error.
-            const double error=idx->residual_norm[id]*original_qnorm
-                      +idx->quant_norm[id]*qerr
-                      +1e-7*(1.0+abs(approximate));
-            bound[id]=approximate+error;
-            approx_consider(Record{int32_t(id),approximate});
-        }
-        vector<uint8_t> visited(count,0);
+        priority_queue<Pending,vector<Pending>,SmallFirst> pending;
+        pending.push({upper(0),0});
         int32_t exact_evaluations=0;
-        // Seed the exact top-k threshold; these are not assumed true neighbours.
-        for(const Record &r:cheap_top) {
-            consider(Record{r.id,exact_dot(bank+size_t(r.id)*d,q.data(),d)});
-            visited[r.id]=1;
+        while(!pending.empty()){
+          const Pending top=pending.top();
+          if(heap.size()==size_t(k) && top.upper<heap.front().score)break;
+          pending.pop();
+          const auto&node=t->nodes[top.node];
+          if(node.left>=0) {
+            const double a=upper(node.left),b=upper(node.right);
+            if(heap.size()<size_t(k)||a>=heap.front().score)
+              pending.push({a,node.left});
+            if(heap.size()<size_t(k)||b>=heap.front().score)
+              pending.push({b,node.right});
+            continue;
+          }
+          for(uint32_t pos=node.begin;pos<node.end;++pos){
+            const int32_t id=int32_t(t->order[pos]);
+            if(heap.size()==size_t(k)){
+              const int64_t z=approximate_dot(
+                  idx->code.data()+size_t(pos)*d,qcode.data(),d);
+              const double approximate=double(z)*idx->scales[pos]*scale;
+              const double error=idx->residual_norm[pos]*nq
+                     +idx->quant_norm[pos]*qerr
+                     +1e-7*(1.0+abs(approximate));
+              if(approximate+error<heap.front().score)continue;
+            }
+            consider(Record{id,exact_dot(bank+size_t(id)*d,q.data(),d)});
             ++exact_evaluations;
-        }
-        for(uint64_t id=0;id<count;++id) {
-            if(visited[id])continue;
-            if(heap.size()==size_t(k) && bound[id]<heap.front().score)
-                continue; // provably outside exact top-k
-            consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
-            ++exact_evaluations;
+          }
         }
         if(stats)stats[2]=double(exact_evaluations);
     } else {
