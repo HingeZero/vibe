@@ -186,6 +186,43 @@ QuantDot choose_quant_dot(){
   return &quant_dot_scalar;
 }
 
+
+int64_t mixed_dot_scalar(const int8_t*a,const int16_t*b,int d) {
+  int64_t z=0;
+  for(int j=0;j<d;++j)z+=int64_t(a[j])*int64_t(b[j]);
+  return z;
+}
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx2")))
+int64_t mixed_dot_avx2(const int8_t*a,const int16_t*b,int d){
+    int64_t result=0;
+    int j=0;
+    alignas(32) int32_t lanes[8];
+    while(j+15<d){
+       const int until=min(d-15,j+256);
+       __m256i sum=_mm256_setzero_si256();
+       while(j<until){
+         const auto ap=_mm_loadu_si128(reinterpret_cast<const __m128i*>(a+j));
+         const auto bp=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j));
+         const auto wide=_mm256_cvtepi8_epi16(ap);
+         sum=_mm256_add_epi32(sum,_mm256_madd_epi16(wide,bp));
+         j+=16;
+       }
+       _mm256_store_si256(reinterpret_cast<__m256i*>(lanes),sum);
+       for(int x:lanes)result+=int64_t(x);
+    }
+    for(;j<d;++j)result+=int64_t(a[j])*int64_t(b[j]);
+    return result;
+}
+#endif
+using MixedDot=int64_t(*)(const int8_t*,const int16_t*,int);
+MixedDot choose_mixed_dot(){
+#if defined(__x86_64__) && defined(__GNUC__)
+  if(__builtin_cpu_supports("avx2"))return &mixed_dot_avx2;
+#endif
+  return &mixed_dot_scalar;
+}
+
 struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
@@ -299,11 +336,15 @@ struct Memory{
     };
     if(metric==1 && certified) {
         const auto* idx=certified.get();
-        const double qscale=CertifiedIndex::encoding_scale(q.data(),d);
-        vector<int8_t> qcode(d);
-        double qerr=0,quant_norm=0;
-        CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&quant_norm);
-        const QuantDot approximate_dot=choose_quant_dot();
+        double qmax=0;
+        for(float v:q)qmax=max(qmax,abs(double(v)));
+        const double qscale=qmax>0?qmax/16383.0:1.0;
+        vector<int16_t> qcode(d);
+        for(int j=0;j<d;++j){
+           const auto z=llround(double(q[j])/qscale);
+           qcode[j]=int16_t(max(-16383LL,min(16383LL,z)));
+        }
+        const MixedDot approximate_dot=choose_mixed_dot();
         const DotImpl exact_dot=select_dot_ip();
         const int budget=min<int>(int(count),max<int>(k,shortlist_budget));
         vector<Record> shortlist;
