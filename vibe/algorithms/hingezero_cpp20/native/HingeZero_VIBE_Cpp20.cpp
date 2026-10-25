@@ -123,7 +123,7 @@ struct Memory{
    if(metric==2)return nr>0&&nq>0?s/(sqrt(nr)*nq):0;
    return s;
  }
- void query(const float*original,int32_t k,int steps,bool enabled,
+ void query(const float*original,int32_t k,int steps,int enabled,
             int32_t*out,double*stats)const{
     if(!original||!out||k<1||uint64_t(k)>count)
        throw runtime_error("invalid query");
@@ -189,7 +189,7 @@ int hz20_query(void*handle,const float*q,int32_t k,int steps,int refined,
                int32_t*ids,double*stats)noexcept{
   try{
     if(!handle)throw runtime_error("null memory handle");
-    static_cast<Memory*>(handle)->query(q,k,steps,refined!=0,ids,stats);
+    static_cast<Memory*>(handle)->query(q,k,steps,refined,ids,stats);
     return 0;
   }catch(const exception&ex){last_error=ex.what();return -1;}
 }

@@ -93,6 +93,21 @@ def run():
             anchored.set_query_arguments(8)
             adaptation=anchored.query(q,100)
             assert len(adaptation)==len(set(adaptation))==100
+            # Verify which vector the native scanner actually ranked against.
+            r=anchored.refined_vector(q,8).astype(np.float64)
+            anchor=q.astype(np.float64)
+            anchor/=max(float(np.linalg.norm(anchor)),1e-12)
+            mixed=.95*anchor+.05*r
+            mixed/=max(float(np.linalg.norm(mixed)),1e-12)
+            if metric=="euclidean":
+                mixed*=float(np.linalg.norm(q.astype(np.float64)))
+                expected_scores=-np.sum((v-mixed)**2,axis=1)
+            elif metric=="cosine":
+                expected_scores=(v@mixed)/(np.linalg.norm(v,axis=1)*np.linalg.norm(mixed))
+            else:
+                expected_scores=v@mixed
+            expected_ids=np.lexsort((np.arange(len(v)),-expected_scores))[:100]
+            assert np.array_equal(adaptation,expected_ids), f"{metric}: anchored route mismatch"
             hz=HingeZeroCpp20(metric,mode="refined").load_memory(root)
             hz.set_query_arguments(8)
             refined=hz.query(q,100)
