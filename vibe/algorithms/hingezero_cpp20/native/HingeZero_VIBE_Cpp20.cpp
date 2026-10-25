@@ -174,6 +174,109 @@ DigitDot choose_digit_dot() {
   return &digit_dot_scalar;
 }
 
+struct Certified8BitIndex {
+  int d;
+  uint64_t n;
+  vector<int8_t> code;
+  vector<double> scales, residual_norm, quant_norm;
+  static constexpr int LIMIT=127;
+  static double encoding_scale(const float* v,int d) {
+    double hi=0;
+    for(int j=0;j<d;++j)hi=max(hi,abs(double(v[j])));
+    return hi>0 ? hi/LIMIT : 1.0;
+  }
+  static void pack(const float* v,int d,double scale,int8_t*dst,
+                   double *err,double *qnorm) {
+    double err2=0,norm2=0;
+    for(int j=0;j<d;++j) {
+      long long z=llround(double(v[j])/scale);
+      z=max(-static_cast<long long>(LIMIT),min(static_cast<long long>(LIMIT),z));
+      dst[j]=int8_t(z);
+      double approx=double(z)*scale;
+      double delta=double(v[j])-approx;
+      err2+=delta*delta;
+      norm2+=approx*approx;
+    }
+    *err=sqrt(err2);
+    *qnorm=sqrt(norm2);
+  }
+  Certified8BitIndex(const float*data,uint64_t count,int width): d(width),n(count) {
+    if(n>SIZE_MAX/size_t(d))throw runtime_error("quantized index too large");
+    code.resize(size_t(n)*d);
+    scales.resize(n);residual_norm.resize(n);quant_norm.resize(n);
+    for(uint64_t i=0;i<n;++i) {
+      const float *src=data+size_t(i)*d;
+      const double s=encoding_scale(src,d);
+      scales[i]=s;
+      pack(src,d,s,code.data()+size_t(i)*d,&residual_norm[i],&quant_norm[i]);
+    }
+  }
+};
+
+
+int64_t quant_dot_scalar(const int8_t*a,const int8_t*b,int d) {
+  int64_t result=0;
+  for(int j=0;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
+  return result;
+}
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx2")))
+int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d) {
+  // Widen signed int8 to signed int16 before pairwise multiply-add.
+  // This avoids saturation that can occur with unsigned/signed pmaddubsw.
+  __m256i acc=_mm256_setzero_si256();
+  int j=0;
+  for(;j+31<d;j+=32){
+     const __m128i a0=_mm_loadu_si128(reinterpret_cast<const __m128i*>(a+j));
+     const __m128i a1=_mm_loadu_si128(reinterpret_cast<const __m128i*>(a+j+16));
+     const __m128i b0=_mm_loadu_si128(reinterpret_cast<const __m128i*>(b+j));
+     const __m128i b1=_mm_loadu_si128(reinterpret_cast<const __m128i*>(b+j+16));
+     const __m256i v0=_mm256_madd_epi16(
+         _mm256_cvtepi8_epi16(a0),_mm256_cvtepi8_epi16(b0));
+     const __m256i v1=_mm256_madd_epi16(
+         _mm256_cvtepi8_epi16(a1),_mm256_cvtepi8_epi16(b1));
+     acc=_mm256_add_epi32(acc,_mm256_add_epi32(v0,v1));
+  }
+  alignas(32) int32_t lanes[8];
+  _mm256_store_si256(reinterpret_cast<__m256i*>(lanes),acc);
+  int64_t total=0;
+  for(int lane=0;lane<8;++lane)total+=lanes[lane];
+  for(;j<d;++j)total+=int32_t(a[j])*int32_t(b[j]);
+  return total;
+}
+#endif
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx512f,avx512bw")))
+int64_t quant_dot_avx512(const int8_t*a,const int8_t*b,int d){
+   __m512i sum=_mm512_setzero_si512();
+   int j=0;
+   for(;j+63<d;j+=64){
+      auto a0=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j));
+      auto b0=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j));
+      auto a1=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j+32));
+      auto b1=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j+32));
+      sum=_mm512_add_epi32(sum,_mm512_madd_epi16(
+         _mm512_cvtepi8_epi16(a0),_mm512_cvtepi8_epi16(b0)));
+      sum=_mm512_add_epi32(sum,_mm512_madd_epi16(
+         _mm512_cvtepi8_epi16(a1),_mm512_cvtepi8_epi16(b1)));
+   }
+   alignas(64) int32_t lane[16];
+   _mm512_store_si512(reinterpret_cast<__m512i*>(lane),sum);
+   int64_t result=0;
+   for(int i=0;i<16;++i)result+=lane[i];
+   for(;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
+   return result;
+}
+#endif
+using QuantDot=int64_t(*)(const int8_t*,const int8_t*,int);
+QuantDot choose_quant_dot(){
+#if defined(__x86_64__) && defined(__GNUC__)
+  if(__builtin_cpu_supports("avx512bw"))return &quant_dot_avx512;
+  if(__builtin_cpu_supports("avx2"))return &quant_dot_avx2;
+#endif
+  return &quant_dot_scalar;
+}
+
 struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
@@ -186,6 +289,7 @@ struct Memory{
  size_t bytes;
  vector<Vec> field;
  unique_ptr<CertifiedIndex> certified;
+ unique_ptr<Certified8BitIndex> cert8;
  Memory(const char*path,uint64_t n,int dimensions,int m,int limit):
    d(dimensions),metric(m),field_limit(limit),count(n){
   if(!path||d<1||d>65536||n<1||n>uint64_t(INT32_MAX)||
@@ -210,7 +314,10 @@ struct Memory{
       for(float x:v)if(!isfinite(x))throw runtime_error("nonfinite field");
       unit(v);field.push_back(std::move(v));
     }
-    if(metric==1)certified=make_unique<CertifiedIndex>(bank,count,d);
+    if(metric==1){
+      certified=make_unique<CertifiedIndex>(bank,count,d);
+      cert8=make_unique<Certified8BitIndex>(bank,count,d);
+    }
   }catch(...){
     if(mapping!=MAP_FAILED)::munmap(mapping,bytes);
     ::close(fd);mapping=MAP_FAILED;fd=-1;throw;
@@ -298,7 +405,7 @@ struct Memory{
         const DotImpl exact_dot=select_dot_ip();
         vector<Record> cheap_top;
         cheap_top.reserve(k);
-        vector<double> bound(count);
+
         const auto approx_consider=[&](Record rec) {
           if(cheap_top.size()<size_t(k)){
              cheap_top.push_back(rec);
@@ -319,11 +426,8 @@ struct Memory{
               +idx->origins[id]*qscale*qdigits
               +qorigin*idx->scales[id]*idx->digits[id]
               +idx->scales[id]*qscale*double(sum);
-            // Cauchy bound includes record/query quantization error.
-            const double error=idx->residual_norm[id]*original_qnorm
-                      +idx->quant_norm[id]*qerr
-                      +1e-7*(1.0+abs(approximate));
-            bound[id]=approximate+error;
+
+
             approx_consider(Record{int32_t(id),approximate});
         }
         vector<uint8_t> visited(count,0);
@@ -334,10 +438,20 @@ struct Memory{
             visited[r.id]=1;
             ++exact_evaluations;
         }
+        const auto* fine=cert8.get();
+        const double q8_scale=Certified8BitIndex::encoding_scale(q.data(),d);
+        vector<int8_t> q8(d);
+        double q8err=0,q8norm=0;
+        Certified8BitIndex::pack(q.data(),d,q8_scale,q8.data(),&q8err,&q8norm);
+        const QuantDot fine_dot=choose_quant_dot();
         for(uint64_t id=0;id<count;++id) {
             if(visited[id])continue;
-            if(heap.size()==size_t(k) && bound[id]<heap.front().score)
-                continue; // provably outside exact top-k
+            const int64_t z=fine_dot(fine->code.data()+size_t(id)*d,q8.data(),d);
+            const double approx=double(z)*fine->scales[id]*q8_scale;
+            const double error=fine->residual_norm[id]*original_qnorm
+                         +fine->quant_norm[id]*q8err
+                         +1e-7*(1.0+abs(approx));
+            if(heap.size()==size_t(k) && approx+error<heap.front().score)continue;
             consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
             ++exact_evaluations;
         }
