@@ -4,6 +4,7 @@ on:
     branches:
       - hingezero-cpp20-vibe
       - hingezero-cpp-v3-vibe
+      - hingezero-cpp20-certified-pruning
     paths:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**
@@ -61,7 +62,7 @@ jobs:
             "",
             "Dataset: yi-128-ip · k=100 · one CPU benchmark core · five timed runs.",
             "The native HingeZero refinement function runs with steps=0, NOT bypassed.",
-            "Search is an exhaustive full-bank float32 scan with witness checks.",
+            "Search uses mathematically bounded 16-bit candidate pruning, original float32 exact scores and witness checks.",
             "Author-run GitHub measurement; not an organizer-certified score.",
             "",
             "| Recall@100 | QPS | Build seconds |",
