@@ -33,6 +33,10 @@ def _native():
     lib.hz20_query.restype = ct.c_int
     lib.hz20_refine.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int, ct.c_void_p]
     lib.hz20_refine.restype = ct.c_int
+    lib.hz20_exact_lookup.argtypes = [ct.c_void_p, ct.c_void_p, ct.POINTER(ct.c_int32)]
+    lib.hz20_exact_lookup.restype = ct.c_int
+    lib.hz20_get_by_id.argtypes = [ct.c_void_p, ct.c_int64, ct.c_void_p]
+    lib.hz20_get_by_id.restype = ct.c_int
     lib.hz20_verify.argtypes = [ct.c_void_p, ct.c_int64, ct.c_void_p]
     lib.hz20_verify.restype = ct.c_int
     lib.hz20_append.argtypes = [ct.c_char_p, ct.c_uint64, ct.c_int,
@@ -247,6 +251,40 @@ class HingeZeroCpp20(BaseANN):
         v = np.ascontiguousarray(v)
         return self.lib.hz20_verify(self.handle,int(record_id),
                  ct.c_void_p(v.ctypes.data)) == 1
+
+    def lookup_exact(self, vector):
+        """Expected O(1) by exact float32 bit pattern, for fixed dimension.
+
+        Returns verified memory details or None. This is NOT a top-k search;
+        HingeZero's query() retains the unchanged VIBE ranking pipeline.
+        """
+        if not self.handle: raise RuntimeError("HingeZero memory not mounted")
+        x=np.asarray(vector,dtype=np.float32)
+        if x.shape != (self.dimension,) or not np.isfinite(x).all():
+            raise ValueError("Exact cue must be a finite float32 vector")
+        x=np.ascontiguousarray(x)
+        found=ct.c_int32(-1)
+        rc=self.lib.hz20_exact_lookup(
+            self.handle,ct.c_void_p(x.ctypes.data),ct.byref(found))
+        if rc<0: raise RuntimeError("HingeZero exact lookup: "+self._err())
+        if rc==0:return None
+        record_id=int(found.value)
+        state=self.lookup_by_id(record_id)
+        if not np.array_equal(state.view(np.uint8),x.view(np.uint8)):
+            raise RuntimeError("Exact-memory key differs from witnessed state")
+        return {"status":"exact","id":record_id,"source":self.source_map.get(
+            record_id,f"vibe:{record_id}"),"verified":True,"vector":state}
+
+    def lookup_by_id(self, record_id):
+        """Direct, witnessed native memory retrieval: O(d), O(1) in bank size."""
+        if not self.handle: raise RuntimeError("HingeZero memory not mounted")
+        i=int(record_id)
+        if i<0 or i>=self.count: raise IndexError("Unknown HingeZero memory ID")
+        record=np.empty(self.dimension,dtype=np.float32)
+        rc=self.lib.hz20_get_by_id(self.handle,i,ct.c_void_p(record.ctypes.data))
+        if rc<0: raise RuntimeError("HingeZero ID lookup: "+self._err())
+        if rc!=1: raise IndexError("Unknown HingeZero memory ID")
+        return record
 
     def memory_recall(self, vector, min_margin=0.1, min_similarity=0.35):
         """Optional abstaining single-memory interface; VIBE requires k IDs."""

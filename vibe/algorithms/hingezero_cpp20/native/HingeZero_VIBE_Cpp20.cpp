@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <string_view>
+#include <unordered_map>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -179,6 +181,7 @@ struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
 }
+#include "HingeZero_Exact_Index.hpp"
 struct Memory{
  int fd=-1,d,metric,field_limit;
  void* mapping=MAP_FAILED;
@@ -187,6 +190,7 @@ struct Memory{
  size_t bytes;
  vector<Vec> field;
  unique_ptr<CertifiedIndex> certified;
+ unique_ptr<ExactMemoryIndex> exact_index;
  Memory(const char*path,uint64_t n,int dimensions,int m,int limit):
    d(dimensions),metric(m),field_limit(limit),count(n){
   if(!path||d<1||d>65536||n<1||n>uint64_t(INT32_MAX)||
@@ -212,6 +216,7 @@ struct Memory{
       unit(v);field.push_back(std::move(v));
     }
     if(metric==1)certified=make_unique<CertifiedIndex>(bank,count,d);
+    exact_index=make_unique<ExactMemoryIndex>(bank,count,d);
   }catch(...){
     if(mapping!=MAP_FAILED)::munmap(mapping,bytes);
     ::close(fd);mapping=MAP_FAILED;fd=-1;throw;
@@ -220,6 +225,25 @@ struct Memory{
  ~Memory(){
    if(mapping!=MAP_FAILED)::munmap(mapping,bytes);
    if(fd>=0)::close(fd);
+ }
+ int exact_lookup(const float*cue,int32_t*out)const{
+   if(!cue||!out)throw runtime_error("Invalid exact lookup arguments");
+   Vec x=refine(cue,0); // HingeZero prepares the cue; no correction iterations
+   int32_t id=exact_index->lookup(x.data());
+   if(id<0) { *out=-1;return 0; }
+   if(!verify(id,x.data()))
+     throw runtime_error("HingeZero exact identity witness rejected match");
+   *out=id;
+   return 1;
+ }
+ int read_by_id(int64_t id,float*out)const{
+   if(!out)throw runtime_error("Null HingeZero memory destination");
+   if(id<0||uint64_t(id)>=count)return 0;
+   const float*original=bank+size_t(id)*d;
+   memcpy(out,original,size_t(d)*sizeof(float));
+   if(!verify(id,out))
+      throw runtime_error("HingeZero ID witness rejected copied state");
+   return 1;
  }
  bool verify(int64_t id,const float*state)const{
    return state&&id>=0&&uint64_t(id)<count&&
@@ -386,6 +410,18 @@ int hz20_refine(void*handle,const float*q,int steps,float*out)noexcept{
     if(!handle||!out)throw runtime_error("null refine handle");
     Vec v=static_cast<Memory*>(handle)->refine(q,steps);
     memcpy(out,v.data(),v.size()*4);return 0;
+  }catch(const exception&ex){last_error=ex.what();return -1;}
+}
+int hz20_exact_lookup(void*handle,const float*key,int32_t*found_id)noexcept{
+  try{
+    if(!handle)throw runtime_error("Null exact-memory handle");
+    return static_cast<Memory*>(handle)->exact_lookup(key,found_id);
+  }catch(const exception&ex){last_error=ex.what();return -1;}
+}
+int hz20_get_by_id(void*handle,int64_t id,float*out_state)noexcept{
+  try{
+    if(!handle)throw runtime_error("Null memory handle");
+    return static_cast<Memory*>(handle)->read_by_id(id,out_state);
   }catch(const exception&ex){last_error=ex.what();return -1;}
 }
 int hz20_verify(void*handle,int64_t id,const float*state)noexcept{
