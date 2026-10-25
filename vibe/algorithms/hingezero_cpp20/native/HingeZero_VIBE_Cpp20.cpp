@@ -88,6 +88,8 @@ struct CertifiedIndex {
   uint64_t n;
   vector<int8_t> code;
   vector<double> scales, residual_norm, quant_norm;
+  vector<int16_t> code16;
+  vector<double> scales16, residual16, quant16;
   static constexpr int LIMIT=127;
   static double encoding_scale(const float* v,int d) {
     double hi=0;
@@ -109,15 +111,36 @@ struct CertifiedIndex {
     *err=sqrt(err2);
     *qnorm=sqrt(norm2);
   }
+  static double scale16(const float*v,int d){
+    double hi=0;
+    for(int j=0;j<d;++j)hi=max(hi,abs(double(v[j])));
+    return hi>0?hi/16383.0:1.0;
+  }
+  static void pack16(const float*v,int d,double s,int16_t*dst,double*err,double*qn){
+    double er=0,no=0;
+    for(int j=0;j<d;++j){
+      const long long z=clamp(llround(double(v[j])/s),-16383LL,16383LL);
+      dst[j]=int16_t(z);
+      const double approx=double(z)*s;
+      er+=(double(v[j])-approx)*(double(v[j])-approx);
+      no+=approx*approx;
+    }
+    *err=sqrt(er);
+    *qn=sqrt(no);
+  }
   CertifiedIndex(const float*data,uint64_t count,int width): d(width),n(count) {
     if(n>SIZE_MAX/size_t(d))throw runtime_error("quantized index too large");
     code.resize(size_t(n)*d);
     scales.resize(n);residual_norm.resize(n);quant_norm.resize(n);
+    code16.resize(size_t(n)*d);
+    scales16.resize(n);residual16.resize(n);quant16.resize(n);
     for(uint64_t i=0;i<n;++i) {
       const float *src=data+size_t(i)*d;
       const double s=encoding_scale(src,d);
       scales[i]=s;
       pack(src,d,s,code.data()+size_t(i)*d,&residual_norm[i],&quant_norm[i]);
+      scales16[i]=scale16(src,d);
+      pack16(src,d,scales16[i],code16.data()+size_t(i)*d,&residual16[i],&quant16[i]);
     }
   }
 };
@@ -184,6 +207,49 @@ QuantDot choose_quant_dot(){
   if(__builtin_cpu_supports("avx2"))return &quant_dot_avx2;
 #endif
   return &quant_dot_scalar;
+}
+
+int64_t quant_dot16_scalar(const int16_t*a,const int16_t*b,int d) {
+  int64_t result=0;
+  for(int j=0;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
+  return result;
+}
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx2")))
+int64_t quant_dot16_avx2(const int16_t*a,const int16_t*b,int d) {
+    // Four int16 pairs stay within signed 32-bit accumulation limits.
+    int64_t total=0;
+    int j=0;
+    alignas(32) int32_t sums[8];
+    for(;j+63<d;j+=64) {
+        __m256i sum=_mm256_setzero_si256();
+        for(int step=0;step<4;++step) {
+            auto va=_mm256_loadu_si256(
+              reinterpret_cast<const __m256i*>(a+j+step*16));
+            auto vb=_mm256_loadu_si256(
+              reinterpret_cast<const __m256i*>(b+j+step*16));
+            sum=_mm256_add_epi32(sum,_mm256_madd_epi16(va,vb));
+        }
+        _mm256_store_si256(reinterpret_cast<__m256i*>(sums),sum);
+        for(int lane=0;lane<8;++lane)total+=sums[lane];
+    }
+    for(;j+15<d;j+=16) {
+        auto va=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j));
+        auto vb=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j));
+        auto sum=_mm256_madd_epi16(va,vb);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(sums),sum);
+        for(int lane=0;lane<8;++lane)total+=sums[lane];
+    }
+    for(;j<d;++j)total+=int32_t(a[j])*int32_t(b[j]);
+    return total;
+}
+#endif
+using QuantDot16=int64_t(*)(const int16_t*,const int16_t*,int);
+QuantDot16 choose_quant_dot16() {
+#if defined(__x86_64__) && defined(__GNUC__)
+    if(__builtin_cpu_supports("avx2"))return &quant_dot16_avx2;
+#endif
+    return &quant_dot16_scalar;
 }
 
 struct Record{int32_t id;double score;};
@@ -302,8 +368,13 @@ struct Memory{
         vector<int8_t> qcode(d);
         double qerr=0,qn_quant=0;
         CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&qn_quant);
+        const double qscale16=CertifiedIndex::scale16(q.data(),d);
+        vector<int16_t> qcode16(d);
+        double qerr16=0,qn_quant16=0;
+        CertifiedIndex::pack16(q.data(),d,qscale16,qcode16.data(),&qerr16,&qn_quant16);
         const double original_qnorm=nq;
         const QuantDot approx_dot=choose_quant_dot();
+        const QuantDot16 approx_dot16=choose_quant_dot16();
         const DotImpl exact_dot=select_dot_ip();
         vector<Record> cheap_top;
         cheap_top.reserve(k);
@@ -340,7 +411,15 @@ struct Memory{
         for(uint64_t id=0;id<count;++id) {
             if(visited[id])continue;
             if(heap.size()==size_t(k) && bound[id]<heap.front().score)
-                continue; // provably outside exact top-k
+                continue;
+            const int16_t* row16=idx->code16.data()+size_t(id)*d;
+            const double ap16=double(approx_dot16(row16,qcode16.data(),d))
+                                  *idx->scales16[id]*qscale16;
+            const double er16=idx->residual16[id]*original_qnorm
+                      +idx->quant16[id]*qerr16
+                      +1e-7*(1.0+abs(ap16));
+            if(heap.size()==size_t(k) && ap16+er16<heap.front().score)
+                continue;
             consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
             ++exact_evaluations;
         }
