@@ -14,6 +14,11 @@ def open_native(file):
     obj.hz20_query.restype=ct.c_int
     obj.hz20_close.argtypes=[ct.c_void_p]
     obj.hz20_close.restype=None
+    try:
+        obj.hz20_set_budget.argtypes=[ct.c_void_p,ct.c_int]
+        obj.hz20_set_budget.restype=ct.c_int
+    except AttributeError:
+        pass
     return obj
 
 def run(lib,path,n,d,queries,k=100):
@@ -21,6 +26,8 @@ def run(lib,path,n,d,queries,k=100):
     handle=lib.hz20_open(os.fsencode(path),n,d,1,256)
     build=time.perf_counter()-t
     assert handle
+    if hasattr(lib,"hz20_set_budget"):
+        assert lib.hz20_set_budget(handle,208)==0
     answers=np.empty((len(queries),k),np.int32)
     stats=np.zeros(3,np.float64)
     try:

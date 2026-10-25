@@ -215,9 +215,34 @@ int64_t mixed_dot_avx2(const int8_t*a,const int16_t*b,int d){
     return result;
 }
 #endif
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx512f,avx512bw")))
+int64_t mixed_dot_avx512(const int8_t*a,const int16_t*b,int d){
+    int64_t result=0;
+    int j=0;
+    alignas(64) int32_t lanes[16];
+    while(j+31<d){
+       const int until=min(d-31,j+256);
+       __m512i acc=_mm512_setzero_si512();
+       while(j<until){
+          const auto av=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j));
+          const auto bv=_mm512_loadu_si512(reinterpret_cast<const void*>(b+j));
+          acc=_mm512_add_epi32(acc,_mm512_madd_epi16(_mm512_cvtepi8_epi16(av),bv));
+          j+=32;
+       }
+       _mm512_store_si512(reinterpret_cast<void*>(lanes),acc);
+       for(int v:lanes)result+=int64_t(v);
+    }
+    for(;j<d;++j)result+=int64_t(a[j])*int64_t(b[j]);
+    return result;
+}
+#endif
 using MixedDot=int64_t(*)(const int8_t*,const int16_t*,int);
 MixedDot choose_mixed_dot(){
 #if defined(__x86_64__) && defined(__GNUC__)
+#if !defined(HZ_FORCE_AVX2)
+  if(__builtin_cpu_supports("avx512bw"))return &mixed_dot_avx512;
+#endif
   if(__builtin_cpu_supports("avx2"))return &mixed_dot_avx2;
 #endif
   return &mixed_dot_scalar;
