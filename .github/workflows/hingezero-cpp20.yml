@@ -8,6 +8,7 @@ on:
       - hingezero-cpp20-2bit-vibe-lab
       - hingezero-cpp20-2bit-8bit-cascade
       - hingezero-cpp20-2bit-sampled-cascade
+      - hingezero-cpp20-2bit-vnni-lab
     paths:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**

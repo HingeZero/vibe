@@ -214,14 +214,14 @@ struct Certified8BitIndex {
 };
 
 
-int64_t quant_dot_scalar(const int8_t*a,const int8_t*b,int d) {
+int64_t quant_dot_scalar(const int8_t*a,const int8_t*b,int d,int qsum) {
   int64_t result=0;
   for(int j=0;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
   return result;
 }
 #if defined(__x86_64__) && defined(__GNUC__)
 __attribute__((target("avx2")))
-int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d) {
+int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d,int qsum) {
   // Widen signed int8 to signed int16 before pairwise multiply-add.
   // This avoids saturation that can occur with unsigned/signed pmaddubsw.
   __m256i acc=_mm256_setzero_si256();
@@ -247,7 +247,7 @@ int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d) {
 #endif
 #if defined(__x86_64__) && defined(__GNUC__)
 __attribute__((target("avx512f,avx512bw")))
-int64_t quant_dot_avx512(const int8_t*a,const int8_t*b,int d){
+int64_t quant_dot_avx512(const int8_t*a,const int8_t*b,int d,int qsum){
    __m512i sum=_mm512_setzero_si512();
    int j=0;
    for(;j+63<d;j+=64){
@@ -268,9 +268,29 @@ int64_t quant_dot_avx512(const int8_t*a,const int8_t*b,int d){
    return result;
 }
 #endif
-using QuantDot=int64_t(*)(const int8_t*,const int8_t*,int);
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx512f,avx512bw,avx512vnni")))
+int64_t quant_dot_vnni(const int8_t*a,const int8_t*b,int d,int qsum) {
+    __m512i accum=_mm512_setzero_si512();
+    const __m512i flip=_mm512_set1_epi8(char(0x80));
+    int j=0;
+    for(;j+63<d;j+=64) {
+        const __m512i av=_mm512_loadu_si512(reinterpret_cast<const void*>(a+j));
+        const __m512i bv=_mm512_loadu_si512(reinterpret_cast<const void*>(b+j));
+        accum=_mm512_dpbusd_epi32(accum,_mm512_xor_si512(av,flip),bv);
+    }
+    alignas(64) int32_t lanes[16];
+    _mm512_store_si512(reinterpret_cast<void*>(lanes),accum);
+    int64_t score=0;
+    for(int v:lanes)score+=v;
+    for(;j<d;++j)score+=(int64_t(a[j])+128)*int64_t(b[j]);
+    return score-128LL*qsum;
+}
+#endif
+using QuantDot=int64_t(*)(const int8_t*,const int8_t*,int,int);
 QuantDot choose_quant_dot(){
 #if defined(__x86_64__) && defined(__GNUC__)
+  if(__builtin_cpu_supports("avx512vnni"))return &quant_dot_vnni;
   if(__builtin_cpu_supports("avx512bw"))return &quant_dot_avx512;
   if(__builtin_cpu_supports("avx2"))return &quant_dot_avx2;
 #endif
@@ -444,10 +464,12 @@ struct Memory{
         vector<int8_t> q8(d);
         double q8err=0,q8norm=0;
         Certified8BitIndex::pack(q.data(),d,q8_scale,q8.data(),&q8err,&q8norm);
+        int q8sum=0;
+        for(int8_t v:q8)q8sum+=int(v);
         const QuantDot fine_dot=choose_quant_dot();
         for(uint64_t id=0;id<count;++id) {
             if(visited[id])continue;
-            const int64_t z=fine_dot(fine->code.data()+size_t(id)*d,q8.data(),d);
+            const int64_t z=fine_dot(fine->code.data()+size_t(id)*d,q8.data(),d,q8sum);
             const double approx=double(z)*fine->scales[id]*q8_scale;
             const double error=fine->residual_norm[id]*original_qnorm
                          +fine->quant_norm[id]*q8err
