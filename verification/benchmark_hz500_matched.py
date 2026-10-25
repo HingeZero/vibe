@@ -12,15 +12,20 @@ def open_native(file):
     obj.hz20_open.restype=ct.c_void_p
     obj.hz20_query.argtypes=[ct.c_void_p,ct.c_void_p,ct.c_int32,ct.c_int,ct.c_void_p,ct.c_void_p]
     obj.hz20_query.restype=ct.c_int
+    if hasattr(obj,'hz20_set_budget'):
+        obj.hz20_set_budget.argtypes=[ct.c_void_p,ct.c_int]
+        obj.hz20_set_budget.restype=ct.c_int
     obj.hz20_close.argtypes=[ct.c_void_p]
     obj.hz20_close.restype=None
     return obj
 
-def run(lib,path,n,d,queries,k=100):
+def run(lib,path,n,d,queries,k=100,budget=None):
     t=time.perf_counter()
     handle=lib.hz20_open(os.fsencode(path),n,d,1,256)
     build=time.perf_counter()-t
     assert handle
+    if budget is not None:
+        assert lib.hz20_set_budget(handle,int(budget))==0
     answers=np.empty((len(queries),k),np.int32)
     stats=np.zeros(3,np.float64)
     try:
@@ -57,7 +62,7 @@ def main():
         bank.tofile(mem)
         results=[]
         for name,lib in [("ref",old),("new",new),("new",new),("ref",old)]:
-            qps,build,ids,candidates=run(lib,mem,n,d,qs)
+            qps,build,ids,candidates=run(lib,mem,n,d,qs,budget=208 if name=='new' else None)
             results.append((name,qps,build,ids,candidates))
             print(f"MATCHED {name} QPS {qps:.2f} build_s {build:.2f} fullscore_avg {candidates:.1f}")
         exact=results[0][3]

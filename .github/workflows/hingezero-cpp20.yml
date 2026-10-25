@@ -7,6 +7,7 @@ on:
       - hingezero-cpp20-500qps-lab
       - hingezero-cpp20-zero-maxqps-lab
       - hingezero-cpp20-zero-q16fast-lab
+      - hingezero-vibe-86666-submission-check
     paths:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**
@@ -58,15 +59,35 @@ jobs:
         env:
           HZ500_REFERENCE_LIB: /tmp/hz500_reference.so
         run: python verification/benchmark_hz500_matched.py
-      - name: Export VIBE recall-throughput sweep
+      - name: Export pinned VIBE result
         run: |
           python export_results.py --parallelism 1 --skip-pca-mahalanobis
           python - <<'PY'
           import polars as pl
           data=pl.read_parquet("results/summary.parquet").filter(pl.col("algorithm")=="hingezero")
-          for r in sorted(data.to_dicts(),key=lambda r:r["qps"],reverse=True):
-              print(f"VIBE_SWEEP recall={r['recall']:.7f} qps={r['qps']:.2f} build={r['build_time']:.2f} params={r['params']}",flush=True)
-          print("SWEEP_100_PERCENT="+str([(r["qps"],r["params"]) for r in data.to_dicts() if r["recall"]==1.0]),flush=True)
+          from pathlib import Path
+          assert data.height==1, f"Expected one pinned HingeZero configuration, got {data.height}"
+          r=data.to_dicts()[0]
+          assert "|0_208" in r["params"], "Configuration is not steps=0,budget=208"
+          assert 0<=r["recall"]<=1 and r["qps"]>0
+          report="\n".join([
+              "# HingeZero C++20 — single-core zero-step 8-bit shortlist",
+              "",
+              "Dataset: yi-128-ip | k=100 | steps=0 | candidate budget=208",
+              "One CPU benchmark process/core | five timed runs.",
+              "",
+              "| Measured recall@100 | QPS | Build time (s) |",
+              "|---:|---:|---:|",
+              f"| {r['recall']:.7f} | {r['qps']:.2f} | {r['build_time']:.2f} |",
+              "",
+              "The 8-bit shortlist is approximate; 100% measured recall is not a guarantee",
+              "for other data or queries. Exact scoring of shortlisted original float32",
+              "records and native stored-state witness verification remain enabled.",
+              "Author-run GitHub Actions, not organizer-certified.",
+          ])+"\n"
+          Path("results/HINGEZERO_CPP20_ZERO_REPORT.md").write_text(report)
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f: f.write(report)
+          print(report)
           PY
       - name: Upload single submitted result
         if: always()

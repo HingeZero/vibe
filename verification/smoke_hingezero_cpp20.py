@@ -45,7 +45,7 @@ def run():
             assert not reopened.witness(1024,corrupted)
             cue=rng.normal(size=128).astype(np.float32)
             if metric=="normalized":cue/=np.linalg.norm(cue)
-            reopened.set_query_arguments(0)
+            reopened.set_query_arguments(0,208)
             assert np.array_equal(reopened.refined_vector(cue,0),cue), "zero-step modified initial cue"
             try:
                 reopened.set_query_arguments(8)
