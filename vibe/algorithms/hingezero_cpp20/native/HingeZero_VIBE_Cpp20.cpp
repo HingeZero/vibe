@@ -165,6 +165,59 @@ QuantDot choose_quant_dot() {
     return &quant_dot_scalar;
 }
 
+
+struct MipsTree {
+ struct Node {vector<double> mean;double radius=0;int left=-1,right=-1;size_t begin=0,end=0;};
+ int d;const float*bank;
+ vector<int32_t> ids;vector<Node> nodes;
+ MipsTree(const float*data,uint64_t count,int dims):d(dims),bank(data) {
+   ids.resize(count);iota(ids.begin(),ids.end(),0);
+   nodes.reserve((count+31)/32*2+4);
+   build(0,ids.size(),0);
+ }
+ int build(size_t begin,size_t end,int depth){
+   const int here=int(nodes.size());nodes.emplace_back();
+   Node& node=nodes[here];
+   node.begin=begin;node.end=end;node.mean.assign(d,0.0);
+   for(size_t i=begin;i<end;++i){
+      const float*p=bank+size_t(ids[i])*d;
+      for(int j=0;j<d;++j)node.mean[j]+=double(p[j]);
+   }
+   const double inv=1.0/double(end-begin);
+   for(double&v:node.mean)v*=inv;
+   double maxr=0;
+   for(size_t i=begin;i<end;++i){
+      const float*p=bank+size_t(ids[i])*d;double dist=0;
+      for(int j=0;j<d;++j){double z=double(p[j])-node.mean[j];dist+=z*z;}
+      maxr=max(maxr,sqrt(dist));
+   }
+   node.radius=maxr*(1+1e-12)+1e-8;
+   if(end-begin<=64)return here;
+   int axis=0;
+   double spread=-1;
+   for(int j=0;j<d;++j){
+      double variance=0;
+      for(size_t i=begin;i<end;++i){
+        double z=double(bank[size_t(ids[i])*d+j])-node.mean[j];
+        variance+=z*z;
+      }
+      if(variance>spread){spread=variance;axis=j;}
+   }
+   const size_t mid=(begin+end)/2;
+   nth_element(ids.begin()+begin,ids.begin()+mid,ids.begin()+end,
+     [&](int32_t a,int32_t b){return bank[size_t(a)*d+axis]<bank[size_t(b)*d+axis];});
+   int left=build(begin,mid,depth+1);
+   int right=build(mid,end,depth+1);
+   nodes[here].left=left;nodes[here].right=right;
+   return here;
+ }
+ double upper(int id,const float*q,double nq)const {
+    const Node&n=nodes[id];double dot=0;
+    for(int j=0;j<d;++j)dot+=n.mean[j]*double(q[j]);
+    return dot+n.radius*nq+1e-6*(1+abs(dot)+n.radius*nq);
+ }
+};
+
 struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
@@ -177,6 +230,7 @@ struct Memory{
  size_t bytes;
  vector<Vec> field;
  unique_ptr<CertifiedIndex> certified;
+ unique_ptr<MipsTree> mips_tree;
  Memory(const char*path,uint64_t n,int dimensions,int m,int limit):
    d(dimensions),metric(m),field_limit(limit),count(n){
   if(!path||d<1||d>65536||n<1||n>uint64_t(INT32_MAX)||
@@ -201,7 +255,7 @@ struct Memory{
       for(float x:v)if(!isfinite(x))throw runtime_error("nonfinite field");
       unit(v);field.push_back(std::move(v));
     }
-    if(metric==1)certified=make_unique<CertifiedIndex>(bank,count,d);
+    if(metric==1){certified=make_unique<CertifiedIndex>(bank,count,d);mips_tree=make_unique<MipsTree>(bank,count,d);}
   }catch(...){
     if(mapping!=MAP_FAILED)::munmap(mapping,bytes);
     ::close(fd);mapping=MAP_FAILED;fd=-1;throw;
@@ -275,7 +329,33 @@ struct Memory{
          push_heap(heap.begin(),heap.end(),better);
       }
     };
-    if(metric==1 && certified) {
+    if(metric==1 && mips_tree){
+       const auto*tree=mips_tree.get();
+       const DotImpl exact_dot=select_dot_ip();
+       struct Branch{int id;double upper;};
+       auto cmp=[](const Branch&a,const Branch&b){return a.upper<b.upper;};
+       priority_queue<Branch,vector<Branch>,decltype(cmp)> pending(cmp);
+       pending.push({0,tree->upper(0,q.data(),nq)});
+       int32_t evaluated=0;
+       while(!pending.empty()){
+          auto cur=pending.top();pending.pop();
+          if(heap.size()==size_t(k) && cur.upper<heap.front().score)continue;
+          const auto&node=tree->nodes[cur.id];
+          if(node.left<0){
+             for(size_t pos=node.begin;pos<node.end;++pos){
+               const int32_t id=tree->ids[pos];
+               consider(Record{id,exact_dot(bank+size_t(id)*d,q.data(),d)});
+               ++evaluated;
+             }
+          }else{
+             for(int child:{node.left,node.right}){
+               double ub=tree->upper(child,q.data(),nq);
+               if(heap.size()!=size_t(k)||ub>=heap.front().score)pending.push({child,ub});
+             }
+          }
+       }
+       if(stats)stats[2]=double(evaluated);
+    }else if(metric==1 && certified) {
         const auto* idx=certified.get();
         const auto qscale=CertifiedIndex::encoding_scale(q.data(),d);
         vector<int16_t> qcode(d);
