@@ -1,8 +1,4 @@
-// HingeZero C++20 real-vector VIBE adaptation of David Duffy's
-// HingeZero_Native_1B.cpp. The original bipolar engine is bundled unchanged.
-// Original: bipolar 128-bit records, 256 fixed-field memories, 8 dual-tanh
-// steps, whole-bank scan, tagged witness, append-only file. This adaptation:
-// FLOAT32 vectors because yi-128-ip is NOT bipolar; no lossy sign shortlist.
+// VIBE float32 adaptation of HingeZero_Native_1B.cpp (David Duffy).
 #include <algorithm>
 #include <bit>
 #include <chrono>
@@ -41,9 +37,7 @@ float dot(const float*a,const float*b,int d){
  float s=0;for(int j=0;j<d;++j)s+=a[j]*b[j];return s;
 }
 
-// SIMD exact inner product. Values are promoted to float64 before multiplying,
-// preserving VIBE's original floating-point scoring semantics. Runtime dispatch
-// means the shared object remains safe on CPUs that do not support AVX2.
+// Accumulate float32 products in float64 to match the VIBE metric.
 #if defined(__x86_64__) && defined(__GNUC__)
 __attribute__((target("avx2")))
 double dot_ip_avx2(const float* a,const float* b,int d) {
@@ -88,10 +82,7 @@ DotImpl select_dot_ip() {
 }
 
 
-// Portable certified 16-bit candidate pruning for real-valued inner products.
-// Unlike a heuristic ANN shortlist, records are omitted only if a Cauchy
-// upper bound proves their exact score cannot beat the current kth record.
-// The original source vector is always used for final exact scoring.
+// Quantized candidate bounds; final scores use the original float32 vectors.
 struct CertifiedIndex {
   int d;
   uint64_t n;
@@ -139,8 +130,7 @@ int64_t quant_dot_scalar(const int16_t*a,const int16_t*b,int d) {
 #if defined(__x86_64__) && defined(__GNUC__)
 __attribute__((target("avx2")))
 int64_t quant_dot_avx2(const int16_t*a,const int16_t*b,int d) {
-    // 4 * (two 16-bit signed products) per 32-bit lane is safe at
-    // max |quantized value|=16383: <= 2,147,221,512, below INT32_MAX.
+    // Four int16 pairs stay within signed 32-bit accumulation limits.
     int64_t total=0;
     int j=0;
     alignas(32) int32_t sums[8];
@@ -229,9 +219,7 @@ struct Memory{
    if(!cue||steps<0||steps>64)throw runtime_error("invalid refinement");
    Vec x(cue,cue+d);
    for(float a:x)if(!isfinite(a))throw runtime_error("nonfinite cue");
-   // Zero-step HingeZero: x_0 is returned unchanged. We still enter the
-   // same native refine/query/witness pipeline, but execute no iteration.
-   // This is not the separate enabled==0 "raw" bypass.
+   // Zero steps leaves the cue unchanged; memory search still runs.
    if(steps==0)return x;
    unit(x);
    if(dot(x.data(),x.data(),d)<1e-15f){
@@ -272,16 +260,11 @@ struct Memory{
     if(!original||!out||k<1||uint64_t(k)>count)
        throw runtime_error("invalid query");
     auto t0=chrono::steady_clock::now();
-    // Single HingeZero pipeline: prepare the initial state in refine()
-    // then perform all-memory search and witnessed validation. No bypass.
     if(steps!=0) throw runtime_error("submitted HingeZero step count must be zero");
     Vec q=refine(original,steps);
     auto t1=chrono::steady_clock::now();
     double nq=0;for(float x:q)nq+=double(x)*x;nq=sqrt(nq);
-    // Full original-record scan exactly as the source billion-memory variant.
-    // Only the score function differs to preserve the real VIBE metric.
     vector<Record> heap;heap.reserve(k);
-    // Top-k heap identical to the unoptimised native HingeZero scanner.
     auto consider=[&](Record candidate) {
       if(heap.size()<size_t(k)) {
          heap.push_back(candidate);
@@ -318,9 +301,7 @@ struct Memory{
             const int16_t *row=idx->code.data()+size_t(id)*d;
             const int64_t intdot=approx_dot(row,qcode.data(),d);
             const double approximate=double(intdot)*idx->scales[id]*qscale;
-            // Triangle inequality:
-            // x.q - xq.qq = (x-xq).q + xq.(q-qq).
-            // A numerical guard handles float/double rounding.
+            // Cauchy bound includes record/query quantization error.
             const double error=idx->residual_norm[id]*original_qnorm
                       +idx->quant_norm[id]*qerr
                       +1e-7*(1.0+abs(approximate));
@@ -329,8 +310,7 @@ struct Memory{
         }
         vector<uint8_t> visited(count,0);
         int32_t exact_evaluations=0;
-        // Establish a legitimate exact score threshold using the highest
-        // approximate-score candidates. This does not assume they are true NN.
+        // Seed the exact top-k threshold; these are not assumed true neighbours.
         for(const Record &r:cheap_top) {
             consider(Record{r.id,exact_dot(bank+size_t(r.id)*d,q.data(),d)});
             visited[r.id]=1;
@@ -343,7 +323,6 @@ struct Memory{
             consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
             ++exact_evaluations;
         }
-        // Expose exact evaluation count without changing the C ABI.
         if(stats)stats[2]=double(exact_evaluations);
     } else {
         for(uint64_t id=0;id<count;++id) {

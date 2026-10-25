@@ -1,10 +1,4 @@
-"""HingeZero C++20 whole-bank memory adapter for VIBE.
-
-Uses David Duffy's original HingeZero_Native_1B.cpp design and includes the
-unaltered original source in native/. The VIBE-specific kernel stores complete
-float32 vectors (not lossy signs) because yi-128-ip is a real-vector benchmark.
-This port uses NO FAISS or externally supplied candidate shortlist.
-"""
+"""Native HingeZero C++20 adapter for VIBE float32 vectors."""
 from __future__ import annotations
 import ctypes as ct
 import json
@@ -46,12 +40,7 @@ def _native():
 
 
 class HingeZeroCpp20(BaseANN):
-    """Single submitted native HingeZero C++20 implementation.
-
-    Refinement step count is fixed at zero, not bypassed. The HingeZero
-    refine() function validates and returns x_0 unchanged, then the same
-    native engine scans each float32 record and verifies the selected IDs.
-    """
+    """Zero-refinement memory search with exact ranking and witness checks."""
 
     def __init__(self, metric, field_size=256, storage_path=None):
         if metric not in ("ip", "normalized", "cosine", "euclidean"):
@@ -249,7 +238,7 @@ class HingeZeroCpp20(BaseANN):
                  ct.c_void_p(v.ctypes.data)) == 1
 
     def memory_recall(self, vector, min_margin=0.1, min_similarity=0.35):
-        """Optional abstaining single-memory interface; VIBE requires k IDs."""
+        """Single-record abstaining retrieval; not used in VIBE evaluation."""
         take=min(self.count,2)
         ids=self.query(vector,take)
         q=self.refined_vector(vector,0)
