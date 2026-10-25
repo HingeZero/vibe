@@ -29,7 +29,7 @@ def _native():
     lib.hz20_open.argtypes = [ct.c_char_p, ct.c_uint64, ct.c_int, ct.c_int, ct.c_int]
     lib.hz20_open.restype = ct.c_void_p
     lib.hz20_query.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int32, ct.c_int,
-                                ct.c_void_p, ct.c_void_p]
+                                ct.c_int, ct.c_void_p, ct.c_void_p]
     lib.hz20_query.restype = ct.c_int
     lib.hz20_refine.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int, ct.c_void_p]
     lib.hz20_refine.restype = ct.c_int
@@ -66,6 +66,7 @@ class HingeZeroCpp20(BaseANN):
         self.count = self.dimension = 0
         self.root = None
         self.steps = 0
+        self.nprobe = 16
         self.refinement_ms = self.scan_ms = self.witness_count = self.queries = 0
         self.source_map = {}
 
@@ -193,8 +194,12 @@ class HingeZeroCpp20(BaseANN):
         self._mount()
         return self
 
-    def set_query_arguments(self, steps):
+    def set_query_arguments(self, steps, nprobe=16):
         steps = int(steps)
+        nprobe = int(nprobe)
+        if not 1 <= nprobe <= min(128, self.count):
+            raise ValueError('Invalid number of native coarse clusters to probe')
+        self.nprobe = nprobe
         if steps != 0:
             raise ValueError("Submitted HingeZero C++20 runs exactly zero refinement steps")
         self.steps = 0
@@ -212,7 +217,7 @@ class HingeZeroCpp20(BaseANN):
         ids = np.empty(n,dtype=np.int32)
         timing = np.zeros(3,dtype=np.float64)
         self._check(self.lib.hz20_query(self.handle,ct.c_void_p(q.ctypes.data),
-                  n,self.steps,
+                  n,self.steps,self.nprobe,
                   ct.c_void_p(ids.ctypes.data),ct.c_void_p(timing.ctypes.data)))
         if len(set(ids.tolist())) != n or np.any(ids<0) or np.any(ids>=self.count):
             raise RuntimeError("Native memory produced invalid IDs")
@@ -276,7 +281,7 @@ class HingeZeroCpp20(BaseANN):
 
     def get_additional(self):
         return {"engine":"C++20 full-bank HingeZero witness/recall",
-            "steps":0,"binary_source_included":True,
+            "steps":0,"nprobe":int(self.nprobe),"binary_source_included":True,
             "float32_bank":True,"bipolar_1b_data":False,
             "witness_checks":int(self.witness_count),
             "scan_ms_total":float(self.scan_ms),

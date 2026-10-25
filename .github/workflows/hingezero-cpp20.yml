@@ -4,6 +4,7 @@ on:
     branches:
       - hingezero-cpp20-vibe
       - hingezero-cpp-v3-vibe
+      - hingezero-cpp20-index-lab
     paths:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**
@@ -53,24 +54,23 @@ jobs:
           from pathlib import Path
           d=pl.read_parquet("results/summary.parquet")
           d=d.filter(pl.col("algorithm")=="hingezero")
-          assert d.height==1, f"Expected exactly ONE HingeZero submission score, got {d.height}"
-          r=d.to_dicts()[0]
-          assert 0 <= r["recall"] <= 1 and r["qps"] > 0
-          report=("\n".join([
-            "# HingeZero C++20: single zero-refinement VIBE submission",
+          assert d.height==6, f"Expected 6 index probe configurations, got {d.height}"
+          rows=d.to_dicts()
+          for r in rows:
+              assert 0<=r["recall"]<=1 and r["qps"]>0
+          report="\\n".join([
+            "# HingeZero C++20 IVF index investigation (zero refinement)",
             "",
-            "Dataset: yi-128-ip · k=100 · one CPU benchmark core · five timed runs.",
-            "The native HingeZero refinement function runs with steps=0, NOT bypassed.",
-            "Search is an exhaustive full-bank float32 scan with witness checks.",
-            "Author-run GitHub measurement; not an organizer-certified score.",
+            "One registered HingeZero algorithm; six internal probe budgets; one CPU core; five timed runs.",
+            "The original PR remains unchanged during this investigation.",
+            "Indexed search may miss original-metric nearest neighbours; witness checks validate identity.",
             "",
-            "| Recall@100 | QPS | Build seconds |",
-            "|---:|---:|---:|",
-            f"| {r['recall']:.5f} | {r['qps']:.2f} | {r['build_time']:.2f} |",
-            "",
-            "Exact exhaustive search can attain 100% recall by definition;",
-            "this does not demonstrate acceleration or a retrieval advantage over alternatives."
-          ])+"\n")
+            "| Query args | Recall@100 | QPS | Build seconds |",
+            "|---|---:|---:|---:|",
+            *[f"| {r.get('query_arguments', r.get('query_args', 'check raw HDF5'))} | {r['recall']:.5f} | {r['qps']:.2f} | {r['build_time']:.2f} |" for r in rows],
+          ])+"\\n"
+          print(d.columns)
+          print(report)
           Path("results/HINGEZERO_CPP20_ZERO_REPORT.md").write_text(report)
           with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f: f.write(report)
           print(report)

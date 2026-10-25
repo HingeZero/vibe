@@ -45,7 +45,7 @@ def run():
             assert not reopened.witness(1024,corrupted)
             cue=rng.normal(size=128).astype(np.float32)
             if metric=="normalized":cue/=np.linalg.norm(cue)
-            reopened.set_query_arguments(0)
+            reopened.set_query_arguments(0,128)
             assert np.array_equal(reopened.refined_vector(cue,0),cue), "zero-step modified initial cue"
             try:
                 reopened.set_query_arguments(8)
@@ -65,6 +65,11 @@ def run():
             assert len(ids)==len(set(ids))==100
             assert reopened.witness(int(ids[0]),reopened.read_record(int(ids[0])))
             assert reopened.get_additional()["steps"]==0
+            if metric=="ip":
+                reopened.set_query_arguments(0,8)
+                sparse=reopened.query(cue,100)
+                assert len(sparse)==len(set(sparse))==100
+                assert reopened.witness(int(sparse[0]),reopened.read_record(int(sparse[0])))
             print(metric,"HINGEZERO_CPP20_ZERO_STEPS_PASS")
     print("SINGLE HINGEZERO CPP20 SUBMISSION SMOKE PASS")
 

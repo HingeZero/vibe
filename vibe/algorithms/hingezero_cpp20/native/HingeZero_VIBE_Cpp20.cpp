@@ -87,6 +87,89 @@ DotImpl select_dot_ip() {
     return &dot_ip_scalar;
 }
 
+
+struct ClusterIndex {
+  int d=0, nlist=0;
+  vector<Vec> centroids;
+  vector<uint32_t> offsets;
+  vector<int32_t> ids;
+  vector<float> packed;
+  // Construction is deterministic and uses only the stored bank, not queries
+  // or test ground truth. Original float32 records remain intact.
+  ClusterIndex(const float*bank,uint64_t n,int dim,int clusters=128):
+      d(dim),nlist(int(min<uint64_t>(clusters,n))) {
+    const int sample=int(min<uint64_t>(8192,n));
+    centroids.assign(nlist,Vec(d,0));
+    uint64_t seed=0x4d595df4d0f33173ULL;
+    auto random64=[&](){
+       seed+=0x9E3779B97F4A7C15ULL;
+       uint64_t z=seed;
+       z=(z^(z>>30))*0xBF58476D1CE4E5B9ULL;
+       z=(z^(z>>27))*0x94D049BB133111EBULL;
+       return z^(z>>31);
+    };
+    vector<int32_t> train(sample);
+    for(int i=0;i<sample;++i)train[i]=int32_t(random64()%n);
+    for(int c=0;c<nlist;++c) {
+        auto id=train[(c*sample)/nlist];
+        const float*row=bank+size_t(id)*d;
+        copy_n(row,d,centroids[c].begin());
+        unit(centroids[c]);
+    }
+    // Spherical k-means: cosine clusters for maximum inner-product search.
+    for(int iter=0;iter<4;++iter){
+       vector<Vec> sums(nlist,Vec(d,0.f));
+       vector<int> counts(nlist,0);
+       for(int32_t id:train) {
+          const float*row=bank+size_t(id)*d;
+          int label=label_for(row);
+          Vec& dst=sums[label];
+          for(int j=0;j<d;++j)dst[j]+=row[j];
+          ++counts[label];
+       }
+       for(int c=0;c<nlist;++c){
+          if(counts[c]){unit(sums[c]);centroids[c]=std::move(sums[c]);}
+       }
+    }
+    vector<uint32_t> counts(nlist,0);
+    // One offline pass assigns every original record to exactly one cluster.
+    for(uint64_t i=0;i<n;++i)++counts[label_for(bank+size_t(i)*d)];
+    offsets.assign(nlist+1,0);
+    for(int c=0;c<nlist;++c)offsets[c+1]=offsets[c]+counts[c];
+    ids.resize(n);
+    packed.resize(size_t(n)*d);
+    vector<uint32_t> cursor(offsets.begin(),offsets.end()-1);
+    for(uint64_t i=0;i<n;++i){
+       const float*record=bank+size_t(i)*d;
+       uint32_t idx=cursor[label_for(record)]++;
+       ids[idx]=int32_t(i);
+       copy_n(record,d,packed.data()+size_t(idx)*d);
+    }
+  }
+  int label_for(const float*row)const{
+     int best=0;float best_value=-numeric_limits<float>::infinity();
+     for(int c=0;c<nlist;++c){
+        float similarity=dot(row,centroids[c].data(),d);
+        if(similarity>best_value){best_value=similarity;best=c;}
+     }
+     return best;
+  }
+  vector<int> probe_order(const float*q)const{
+     vector<pair<float,int>> order;
+     order.reserve(nlist);
+     for(int c=0;c<nlist;++c)
+        order.emplace_back(dot(q,centroids[c].data(),d),c);
+     sort(order.begin(),order.end(),[](auto const&a,auto const&b){
+        if(a.first==b.first)return a.second<b.second;
+        return a.first>b.first;
+     });
+     vector<int> ranked;
+     ranked.reserve(nlist);
+     for(auto const&it:order)ranked.push_back(it.second);
+     return ranked;
+  }
+};
+
 struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
@@ -98,6 +181,7 @@ struct Memory{
  uint64_t count;
  size_t bytes;
  vector<Vec> field;
+ unique_ptr<ClusterIndex> coarse_index;
  Memory(const char*path,uint64_t n,int dimensions,int m,int limit):
    d(dimensions),metric(m),field_limit(limit),count(n){
   if(!path||d<1||d>65536||n<1||n>uint64_t(INT32_MAX)||
@@ -122,6 +206,7 @@ struct Memory{
       for(float x:v)if(!isfinite(x))throw runtime_error("nonfinite field");
       unit(v);field.push_back(std::move(v));
     }
+    if(metric==1){coarse_index=make_unique<ClusterIndex>(bank,count,d);}
   }catch(...){
     if(mapping!=MAP_FAILED)::munmap(mapping,bytes);
     ::close(fd);mapping=MAP_FAILED;fd=-1;throw;
@@ -177,7 +262,7 @@ struct Memory{
    if(metric==2)return nr>0&&nq>0?s/(sqrt(nr)*nq):0;
    return s;
  }
- void query(const float*original,int32_t k,int steps,
+ void query(const float*original,int32_t k,int steps,int nprobe,
             int32_t*out,double*stats)const{
     if(!original||!out||k<1||uint64_t(k)>count)
        throw runtime_error("invalid query");
@@ -202,14 +287,24 @@ struct Memory{
          push_heap(heap.begin(),heap.end(),better);
       }
     };
-    if(metric==1) {
-        // VIBE yi-128-ip hot path. Only the exact arithmetic is vectorised:
-        // every memory is still read, scored, and witness-verified.
+    if(metric==1 && coarse_index) {
+        if(nprobe<1 || nprobe>coarse_index->nlist)
+            throw runtime_error("invalid C++20 candidate probe budget");
         const DotImpl scorer=select_dot_ip();
         const float* query=q.data();
-        for(uint64_t id=0;id<count;++id) {
-            const float* record=bank+size_t(id)*d;
-            consider(Record{int32_t(id),scorer(record,query,d)});
+        const auto order=coarse_index->probe_order(query);
+        int scanned=0;
+        // Full exact float32 inner-product scoring within selected clusters.
+        // Increase probed clusters if needed to return exactly k records.
+        for(int c:order){
+            const uint32_t start=coarse_index->offsets[c];
+            const uint32_t finish=coarse_index->offsets[c+1];
+            for(uint32_t j=start;j<finish;++j){
+                const float* row=coarse_index->packed.data()+size_t(j)*d;
+                consider(Record{coarse_index->ids[j],scorer(row,query,d)});
+            }
+            ++scanned;
+            if(scanned>=nprobe && heap.size()>=size_t(k))break;
         }
     } else {
         for(uint64_t id=0;id<count;++id) {
@@ -239,11 +334,11 @@ void* hz20_open(const char*path,uint64_t n,int d,int metric,int field)noexcept{
   try{last_error.clear();return new Memory(path,n,d,metric,field);}
   catch(const exception&ex){last_error=ex.what();return nullptr;}
 }
-int hz20_query(void*handle,const float*q,int32_t k,int steps,
+int hz20_query(void*handle,const float*q,int32_t k,int steps,int nprobe,
                int32_t*ids,double*stats)noexcept{
   try{
     if(!handle)throw runtime_error("null memory handle");
-    static_cast<Memory*>(handle)->query(q,k,steps,ids,stats);
+    static_cast<Memory*>(handle)->query(q,k,steps,nprobe,ids,stats);
     return 0;
   }catch(const exception&ex){last_error=ex.what();return -1;}
 }

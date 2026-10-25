@@ -9,8 +9,9 @@ float:
       ood: false
       base_args: ['@metric']
       run_groups:
-        native-cpp20:
+        indexed-cpp20-probe-sweep:
           args:
             field_size: [256]
           query_args:
             steps: [0]
+            nprobe: [4, 8, 16, 32, 64, 128]
