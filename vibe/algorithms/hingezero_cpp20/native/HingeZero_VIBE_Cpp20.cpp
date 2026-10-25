@@ -74,6 +74,36 @@ double dot_ip_avx2(const float* a,const float* b,int d) {
     return score;
 }
 #endif
+
+#if defined(__x86_64__) && defined(__GNUC__)
+// Eight float32 inputs are widened to float64 and multiplied exactly in
+// AVX-512 registers. This preserves the original VIBE inner-product metric.
+__attribute__((target("avx512f,avx2")))
+double dot_ip_avx512(const float* a,const float* b,int d) {
+    __m512d x0=_mm512_setzero_pd(),x1=x0,x2=x0,x3=x0;
+    int j=0;
+    for(;j+31<d;j+=32) {
+        x0=_mm512_add_pd(x0,_mm512_mul_pd(
+            _mm512_cvtps_pd(_mm256_loadu_ps(a+j)),
+            _mm512_cvtps_pd(_mm256_loadu_ps(b+j))));
+        x1=_mm512_add_pd(x1,_mm512_mul_pd(
+            _mm512_cvtps_pd(_mm256_loadu_ps(a+j+8)),
+            _mm512_cvtps_pd(_mm256_loadu_ps(b+j+8))));
+        x2=_mm512_add_pd(x2,_mm512_mul_pd(
+            _mm512_cvtps_pd(_mm256_loadu_ps(a+j+16)),
+            _mm512_cvtps_pd(_mm256_loadu_ps(b+j+16))));
+        x3=_mm512_add_pd(x3,_mm512_mul_pd(
+            _mm512_cvtps_pd(_mm256_loadu_ps(a+j+24)),
+            _mm512_cvtps_pd(_mm256_loadu_ps(b+j+24))));
+    }
+    const __m512d total=_mm512_add_pd(_mm512_add_pd(x0,x1),
+                                       _mm512_add_pd(x2,x3));
+    double out=_mm512_reduce_add_pd(total);
+    for(;j<d;++j)out+=double(a[j])*double(b[j]);
+    return out;
+}
+#endif
+
 double dot_ip_scalar(const float* a,const float* b,int d) {
     double score=0;
     for(int j=0;j<d;++j)score+=double(a[j])*double(b[j]);
@@ -82,6 +112,8 @@ double dot_ip_scalar(const float* a,const float* b,int d) {
 using DotImpl=double(*)(const float*,const float*,int);
 DotImpl select_dot_ip() {
 #if defined(__x86_64__) && defined(__GNUC__)
+    if(__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx2"))
+        return &dot_ip_avx512;
     if(__builtin_cpu_supports("avx2"))return &dot_ip_avx2;
 #endif
     return &dot_ip_scalar;
@@ -233,6 +265,13 @@ struct Memory{
 };
 }
 extern "C"{
+int hz20_simd_level() noexcept {
+#if defined(__x86_64__) && defined(__GNUC__)
+    if(__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx2"))return 512;
+    if(__builtin_cpu_supports("avx2"))return 256;
+#endif
+    return 0;
+}
 int hz20_abi()noexcept{return 1;}
 const char* hz20_error()noexcept{return last_error.c_str();}
 void* hz20_open(const char*path,uint64_t n,int d,int metric,int field)noexcept{
