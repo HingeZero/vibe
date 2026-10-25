@@ -185,7 +185,7 @@ class DiskPackedMemory:
         order = np.lexsort((ids[indexes], -scores[indexes]))
         return ids[indexes[order]], scores[indexes[order]]
 
-    def packed_candidates(self, query, count, chunk=65536):
+    def packed_candidates(self, query, count, metric, chunk=65536):
         """One-bit full-bank scan: O(P * ceil(d/8)), bounded work memory."""
         if self.count < 1:
             raise RuntimeError("Memory bank is empty")
@@ -205,13 +205,13 @@ class DiskPackedMemory:
             if self.dimension % 8:
                 # Pad bits were set to zero in both stored and query signatures
                 pass
-            if self.metric == "cosine":
+            if metric == "cosine":
                 coarse = cosine_est
             else:
                 nrm = np.asarray(self.norms[start:end], dtype=np.float64)
                 approx_ip = cosine_est * nrm * query_norm
                 coarse = -(nrm*nrm + query_norm*query_norm - 2*approx_ip) \
-                    if self.metric == "euclidean" else approx_ip
+                    if metric == "euclidean" else approx_ip
             ids = np.arange(start, end, dtype=np.int64)
             local_ids, local_scores = self._top_ids(coarse, ids, wanted)
             all_ids = np.concatenate((top_ids, local_ids))
@@ -358,11 +358,11 @@ class HingeZeroFullMemory(BaseANN):
         if n < 1 or n > self.bank.count:
             raise ValueError("Invalid k")
         seeds_count, extra_count, steps = self.args
-        seeds = self.bank.packed_candidates(original, max(n, seeds_count))
+        seeds = self.bank.packed_candidates(original, max(n, seeds_count), self.metric)
         gathered = seeds
         if extra_count:
             routed = self._refine(original, seeds, steps) if self.mode == "full" else original
-            extras = self.bank.packed_candidates(routed, extra_count)
+            extras = self.bank.packed_candidates(routed, extra_count, self.metric)
             gathered = np.unique(np.concatenate((seeds, extras)))
             self.stats["additional_candidates"] += max(0, len(gathered) - len(seeds))
         elif self.mode == "full" and steps:
