@@ -43,7 +43,7 @@ jobs:
         run: python verification/smoke_hingezero_cpp20.py
       - name: Run single submitted HingeZero C++20 algorithm
         run: |
-          python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero --count 100
+          python run.py --local --force --runs 5 --parallelism 1 --dataset yi-128-ip --algorithm hingezero --count 100
       - name: Export single VIBE score
         run: |
           python export_results.py --parallelism 1 --skip-pca-mahalanobis
@@ -59,7 +59,7 @@ jobs:
           report=("\n".join([
             "# HingeZero C++20: single zero-refinement VIBE submission",
             "",
-            "Dataset: yi-128-ip · k=100 · one CPU benchmark core · one run.",
+            "Dataset: yi-128-ip · k=100 · one CPU benchmark core · five timed runs.",
             "The native HingeZero refinement function runs with steps=0, NOT bypassed.",
             "Search is an exhaustive full-bank float32 scan with witness checks.",
             "Author-run GitHub measurement; not an organizer-certified score.",

@@ -64,3 +64,31 @@ raw-search pathway.
 Because this is an **exact exhaustive whole-bank scan**, 100% recall@100
 should not be interpreted as a speed, capacity or accuracy breakthrough.
 The independent VIBE organizer has not accepted or certified these results.
+
+## Zero-step SIMD C++20 optimisation (25 October 2026)
+
+**The submitted HingeZero algorithm remains one configuration, zero refinement
+iterations, with the identical original record store, all-record search,
+and witness validation.** The only change is how the C++20 inner-product
+accumulation is performed: runtime AVX2 SIMD computes exact floating-point
+inner products by promoting original float32 coordinates to double precision.
+CPUs without AVX2 use a scalar fallback. Every vector is still scored; there
+is no shortlist, external FAISS or alternative HingeZero mode.
+
+GitHub-hosted, author-run verification:
+
+- [Single-run VIBE performance](https://github.com/HingeZero/vibe/actions/runs/40166928416):
+  recall@100 = **1.00000**, **311.85 QPS**.
+- [Five-run VIBE evaluation](https://github.com/HingeZero/vibe/actions/runs/40167003998):
+  recall@100 = **1.00000**, **204.60 QPS**.
+- [Five-run VIBE evaluation with same-machine scalar/AVX2 diagnostic](https://github.com/HingeZero/vibe/actions/runs/40167139935):
+  recall@100 = **1.00000**, **152.96 QPS**.
+- The same-machine diagnostic (65,536 vectors; d=128; 192 queries;
+  k=100) measured **31.67 QPS** for the original scalar C++20 engine
+  and **443.85 QPS** for the AVX2-optimised engine: **14.01×** measured
+  speedup, **identical top-100 IDs** across all queries.
+
+QPS varies between GitHub-hosted runner samples. This does not establish
+performance on VIBE's official leaderboard CPU. The difference arises
+from CPU arithmetic optimisation, not from HingeZero nonlinear iterations
+(which remain at zero) or a new approximate index.

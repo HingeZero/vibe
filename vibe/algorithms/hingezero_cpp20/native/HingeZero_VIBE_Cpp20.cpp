@@ -23,6 +23,9 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__x86_64__) && defined(__GNUC__)
+#include <immintrin.h>
+#endif
 using namespace std;
 namespace fs=std::filesystem;
 namespace {
@@ -37,6 +40,53 @@ void unit(Vec&v){
 float dot(const float*a,const float*b,int d){
  float s=0;for(int j=0;j<d;++j)s+=a[j]*b[j];return s;
 }
+
+// SIMD exact inner product. Values are promoted to float64 before multiplying,
+// preserving VIBE's original floating-point scoring semantics. Runtime dispatch
+// means the shared object remains safe on CPUs that do not support AVX2.
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx2")))
+double dot_ip_avx2(const float* a,const float* b,int d) {
+    __m256d s0=_mm256_setzero_pd(),s1=s0,s2=s0,s3=s0;
+    int j=0;
+    for(; j+15<d; j+=16) {
+        const __m256 ar0=_mm256_loadu_ps(a+j), ar1=_mm256_loadu_ps(a+j+8);
+        const __m256 br0=_mm256_loadu_ps(b+j), br1=_mm256_loadu_ps(b+j+8);
+        s0=_mm256_add_pd(s0,_mm256_mul_pd(
+            _mm256_cvtps_pd(_mm256_castps256_ps128(ar0)),
+            _mm256_cvtps_pd(_mm256_castps256_ps128(br0))));
+        s1=_mm256_add_pd(s1,_mm256_mul_pd(
+            _mm256_cvtps_pd(_mm256_extractf128_ps(ar0,1)),
+            _mm256_cvtps_pd(_mm256_extractf128_ps(br0,1))));
+        s2=_mm256_add_pd(s2,_mm256_mul_pd(
+            _mm256_cvtps_pd(_mm256_castps256_ps128(ar1)),
+            _mm256_cvtps_pd(_mm256_castps256_ps128(br1))));
+        s3=_mm256_add_pd(s3,_mm256_mul_pd(
+            _mm256_cvtps_pd(_mm256_extractf128_ps(ar1,1)),
+            _mm256_cvtps_pd(_mm256_extractf128_ps(br1,1))));
+    }
+    s0=_mm256_add_pd(s0,s1); s2=_mm256_add_pd(s2,s3);
+    s0=_mm256_add_pd(s0,s2);
+    alignas(32) double out[4];
+    _mm256_store_pd(out,s0);
+    double score=out[0]+out[1]+out[2]+out[3];
+    for(;j<d;++j)score+=double(a[j])*double(b[j]);
+    return score;
+}
+#endif
+double dot_ip_scalar(const float* a,const float* b,int d) {
+    double score=0;
+    for(int j=0;j<d;++j)score+=double(a[j])*double(b[j]);
+    return score;
+}
+using DotImpl=double(*)(const float*,const float*,int);
+DotImpl select_dot_ip() {
+#if defined(__x86_64__) && defined(__GNUC__)
+    if(__builtin_cpu_supports("avx2"))return &dot_ip_avx2;
+#endif
+    return &dot_ip_scalar;
+}
+
 struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
@@ -141,16 +191,30 @@ struct Memory{
     // Full original-record scan exactly as the source billion-memory variant.
     // Only the score function differs to preserve the real VIBE metric.
     vector<Record> heap;heap.reserve(k);
-    for(uint64_t id=0;id<count;++id){
-      Record candidate{int32_t(id),score(bank+size_t(id)*d,q,nq)};
-      if(heap.size()<size_t(k)){
+    // Top-k heap identical to the unoptimised native HingeZero scanner.
+    auto consider=[&](Record candidate) {
+      if(heap.size()<size_t(k)) {
          heap.push_back(candidate);
          push_heap(heap.begin(),heap.end(),better);
-      }else if(better(candidate,heap.front())){
+      } else if(better(candidate,heap.front())) {
          pop_heap(heap.begin(),heap.end(),better);
          heap.back()=candidate;
          push_heap(heap.begin(),heap.end(),better);
       }
+    };
+    if(metric==1) {
+        // VIBE yi-128-ip hot path. Only the exact arithmetic is vectorised:
+        // every memory is still read, scored, and witness-verified.
+        const DotImpl scorer=select_dot_ip();
+        const float* query=q.data();
+        for(uint64_t id=0;id<count;++id) {
+            const float* record=bank+size_t(id)*d;
+            consider(Record{int32_t(id),scorer(record,query,d)});
+        }
+    } else {
+        for(uint64_t id=0;id<count;++id) {
+            consider(Record{int32_t(id),score(bank+size_t(id)*d,q,nq)});
+        }
     }
     sort(heap.begin(),heap.end(),better);
     for(int i=0;i<k;++i){
