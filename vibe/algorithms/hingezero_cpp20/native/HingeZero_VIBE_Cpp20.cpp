@@ -179,6 +179,8 @@ struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
 }
+#include "HingeZero_Cascade_Index.hpp"
+
 struct Memory{
  int fd=-1,d,metric,field_limit;
  void* mapping=MAP_FAILED;
@@ -187,6 +189,7 @@ struct Memory{
  size_t bytes;
  vector<Vec> field;
  unique_ptr<CertifiedIndex> certified;
+ unique_ptr<CascadeIndex> cascade;
  Memory(const char*path,uint64_t n,int dimensions,int m,int limit):
    d(dimensions),metric(m),field_limit(limit),count(n){
   if(!path||d<1||d>65536||n<1||n>uint64_t(INT32_MAX)||
@@ -211,7 +214,12 @@ struct Memory{
       for(float x:v)if(!isfinite(x))throw runtime_error("nonfinite field");
       unit(v);field.push_back(std::move(v));
     }
-    if(metric==1)certified=make_unique<CertifiedIndex>(bank,count,d);
+    if(metric==1) {
+       const char *on=std::getenv("HINGEZERO_CASCADE");
+       if(d==128 && on && strcmp(on,"1")==0)
+          cascade=make_unique<CascadeIndex>(bank,count,d);
+       else certified=make_unique<CertifiedIndex>(bank,count,d);
+    }
   }catch(...){
     if(mapping!=MAP_FAILED)::munmap(mapping,bytes);
     ::close(fd);mapping=MAP_FAILED;fd=-1;throw;
@@ -292,7 +300,9 @@ struct Memory{
          push_heap(heap.begin(),heap.end(),better);
       }
     };
-    if(metric==1 && certified) {
+    if(metric==1 && cascade) {
+        cascade->search(bank,q.data(),k,heap,select_dot_ip(),stats);
+    } else if(metric==1 && certified) {
         const auto* idx=certified.get();
         const auto qscale=CertifiedIndex::encoding_scale(q.data(),d);
         vector<int16_t> qcode(d);

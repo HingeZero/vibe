@@ -27,6 +27,7 @@ jobs:
       PYTHONUNBUFFERED: "1"
       PYTHONHASHSEED: "0"
       HINGEZERO_CPP20_LIB: /tmp/libhz20.so
+      HINGEZERO_CASCADE: "1"
       HZ20_ORIGINAL_EXE: /tmp/hz20_original
     steps:
       - uses: actions/checkout@v4
@@ -45,7 +46,7 @@ jobs:
         run: python verification/smoke_hingezero_cpp20.py
       - name: Run single submitted HingeZero C++20 algorithm
         run: |
-          python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero --count 100
+          python run.py --local --force --runs 3 --parallelism 1 --dataset yi-128-ip --algorithm hingezero --count 100
       - name: Measure PCA-certified pruning opportunities on held-out corpus vectors
         run: python verification/diagnose_exact_subspace.py
       - name: Export single VIBE score
@@ -63,7 +64,7 @@ jobs:
           report=("\n".join([
             "# HingeZero C++20: single zero-refinement VIBE submission",
             "",
-            "Dataset: yi-128-ip · k=100 · one CPU benchmark core · one timed run.",
+            "Dataset: yi-128-ip · k=100 · one CPU benchmark core · three timed runs.",
             "The native HingeZero refinement function runs with steps=0, NOT bypassed.",
             "Search checks compact int16 score bounds, exact original float32 candidates and native witness integrity.",
             "Author-run GitHub measurement; not an organizer-certified score.",
