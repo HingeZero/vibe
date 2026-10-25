@@ -11,6 +11,8 @@ on:
       - verification/smoke_hingezero_cpp20.py
       - verification/smoke_hingezero_hybrid.py
       - verification/benchmark_hingezero_exact.py
+      - verification/benchmark_hingezero_hybrid_parity.py
+      - verification/reference_cpp20_before_hybrid.cpp
   workflow_dispatch:
 
 permissions:
@@ -51,6 +53,13 @@ jobs:
           python run.py --local --force --runs 5 --parallelism 1 --dataset yi-128-ip --algorithm hingezero --count 100
       - name: Benchmark exact retrieval separately from VIBE top-100 QPS
         run: python verification/benchmark_hingezero_exact.py
+      - name: Compile pre-hybrid C++20 exact-index reference for parity
+        run: |
+          g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off verification/reference_cpp20_before_hybrid.cpp -o /tmp/libhz20_before_hybrid.so
+      - name: Same-host exact top-100 parity and throughput
+        env:
+          HZ20_BEFORE_HYBRID_LIB: /tmp/libhz20_before_hybrid.so
+        run: python verification/benchmark_hingezero_hybrid_parity.py
       - name: Export single VIBE score
         run: |
           python export_results.py --parallelism 1 --skip-pca-mahalanobis

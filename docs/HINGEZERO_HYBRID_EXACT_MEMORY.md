@@ -34,3 +34,34 @@ practically free at billion-record scale; exact-key retrieval is constant
 *expected time in record count*, not constant RAM or an O(1) nearest
 neighbor algorithm. Native/ctypes benchmark timings and VIBE top-k timings
 are reported **separately**.
+
+## 25 October 2026: Verified results
+
+[Author-operated successful hybrid CI run](https://github.com/HingeZero/vibe/actions/runs/40172479284)
+([VIBE result artifact](https://github.com/HingeZero/vibe/actions/runs/40172479284/artifacts/12590293691))
+on 187,843 original 128-dimensional `yi-128-ip` float32 records:
+
+| Operation | Measured QPS | Verification |
+|---|---:|---|
+| Single native exact lookup via Python ctypes | 326,832.72 | bitwise original vector identity |
+| One native-batched exact lookup call over 50,000 cues | **683,865.59** | bitwise original vector identity |
+| Direct ID retrieval via Python ctypes | 732,654.29 | original record returned, witness check |
+| VIBE nearest-neighbour top-100 | **472.71** | recall@100 **1.00000**, 5 timed runs |
+
+Full bank build (including writing original bank and opening both index
+types) was **0.381 seconds** in the separate exact-key test. The VIBE
+five-run measurement reported build time **0.36 seconds**. These
+measurements are host dependent and do not certify 1B-record scale.
+
+The indexed route hashes every byte of the float32 pattern, so expected
+complexity is **O(d)** plus expected **O(1)** hash lookup (for constant
+dimension d), not truly constant with growing vector dimensions.
+Direct ID lookup copies O(d) bytes and is constant in record count.
+The output for an absent exact key is `None`, not a guessed identity.
+Collision matches must compare the original bytes, and duplicates
+return the oldest ID. Nearest-neighbour ranking continues through
+the certified HingeZero search—not this hash route.
+
+The reported QPS applies only to the specified operation; hundreds of
+thousands of exact-key lookups per second is **not** a VIBE result and
+does not imply O(1) top-k similarity matching.
