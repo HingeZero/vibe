@@ -416,7 +416,8 @@ struct Memory{
              push_heap(cheap_top.begin(),cheap_top.end(),better);
           }
         };
-        for(uint64_t id=0;id<count;++id) {
+        const uint64_t stride=max<uint64_t>(1,(count+8191)/8192);
+        for(uint64_t id=0;id<count;id+=stride) {
             const auto row=size_t(id)*idx->blocks;
             const int64_t sum=digit_dot(
               idx->low.data()+row,idx->high.data()+row,
