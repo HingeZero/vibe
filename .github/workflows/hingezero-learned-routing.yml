@@ -34,7 +34,7 @@ jobs:
         run: |
           g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off vibe/algorithms/hingezero_cpp20/native/HingeZero_VIBE_Cpp20.cpp -o "$HINGEZERO_CPP20_LIB"
       - name: Smoke test original-memory ranking and witnesses
-        run: python verification/smoke_hingezero_learned.py
+        run: python -m verification.smoke_hingezero_learned
       - name: Single-core OOD VIBE benchmark, k100, five runs
         run: |
           python run.py --local --force --runs 5 --parallelism 1 --dataset yi-128-ip --algorithm hingezero-learned --count 100
