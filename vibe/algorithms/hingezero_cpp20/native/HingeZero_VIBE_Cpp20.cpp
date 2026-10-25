@@ -186,6 +186,49 @@ QuantDot choose_quant_dot(){
   return &quant_dot_scalar;
 }
 
+
+int64_t split_dot_scalar(const int8_t*a,const int8_t*half,const int8_t*parity,
+                         int d,int qsum){
+    int64_t s=0;
+    for(int j=0;j<d;++j)
+       s+=(int64_t(uint8_t(a[j])^uint8_t(0x80))*
+           (2LL*half[j]+parity[j]));
+    return s-128LL*qsum;
+}
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx2")))
+int64_t split_dot_avx2(const int8_t*a,const int8_t*half,const int8_t*parity,
+                      int d,int qsum){
+    const auto mask=_mm256_set1_epi8(char(0x80));
+    const auto ones=_mm256_set1_epi16(1);
+    __m256i sumhi=_mm256_setzero_si256(),sumlo=_mm256_setzero_si256();
+    int j=0;
+    alignas(32) int32_t hi[8],lo[8];
+    for(;j+31<d;j+=32){
+        const auto av=_mm256_xor_si256(
+          _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j)),mask);
+        const auto hv=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(half+j));
+        const auto pv=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(parity+j));
+        const auto product_hi=_mm256_maddubs_epi16(av,hv);
+        const auto product_lo=_mm256_maddubs_epi16(av,pv);
+        sumhi=_mm256_add_epi32(sumhi,_mm256_madd_epi16(product_hi,ones));
+        sumlo=_mm256_add_epi32(sumlo,_mm256_madd_epi16(product_lo,ones));
+    }
+    _mm256_store_si256(reinterpret_cast<__m256i*>(hi),sumhi);
+    _mm256_store_si256(reinterpret_cast<__m256i*>(lo),sumlo);
+    int64_t total=-128LL*qsum;
+    for(int lane=0;lane<8;++lane)total+=2LL*hi[lane]+lo[lane];
+    for(;j<d;++j)total+=int64_t(a[j])*(2LL*half[j]+parity[j]);
+    return total;
+}
+#endif
+using SplitDot=int64_t(*)(const int8_t*,const int8_t*,const int8_t*,int,int);
+SplitDot choose_split_dot(){
+#if defined(__x86_64__) && defined(__GNUC__)
+   if(__builtin_cpu_supports("avx2"))return &split_dot_avx2;
+#endif
+   return &split_dot_scalar;
+}
 struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
@@ -303,14 +346,23 @@ struct Memory{
         vector<int8_t> qcode(d);
         double qerr=0,quant_norm=0;
         CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&quant_norm);
-        const QuantDot approximate_dot=choose_quant_dot();
+        vector<int8_t> half(d),parity(d);
+        int qsum=0;
+        for(int j=0;j<d;++j){
+           const int v=int(qcode[j]);
+           const int p=(v&1);
+           half[j]=int8_t((v-p)/2);
+           parity[j]=int8_t(p);
+           qsum+=v;
+        }
+        const SplitDot approximate_dot=choose_split_dot();
         const DotImpl exact_dot=select_dot_ip();
         const int budget=min<int>(int(count),max<int>(k,shortlist_budget));
         vector<Record> shortlist;
         shortlist.reserve(budget);
         for(uint64_t id=0;id<count;++id){
             const int64_t raw=approximate_dot(
-                idx->code.data()+size_t(id)*d,qcode.data(),d);
+                idx->code.data()+size_t(id)*d,half.data(),parity.data(),d,qsum);
             const double estimate=double(raw)*idx->scales[id];
             Record candidate{int32_t(id),estimate};
             if(int(shortlist.size())<budget){
