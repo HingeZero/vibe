@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 import numpy as np
 import h5py
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from vibe.algorithms.hingezero_cpp20.module import HingeZeroCpp20
 
 def run():
