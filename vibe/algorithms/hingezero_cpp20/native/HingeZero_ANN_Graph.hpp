@@ -26,11 +26,45 @@ struct GraphANN {
      z=(z^(z>>27))*0x94d049bb133111ebULL;
      return z^(z>>31);
   }
-  static float fast_score(const float*a,const float*b,int d){
-    // Fast score for ANN navigation only; winners get float64 exact reranking.
+  static float scalar_score(const float*a,const float*b,int d){
     float s=0.0f;
-    for(int i=0;i<d;++i) s+=a[i]*b[i];
+    for(int i=0;i<d;++i)s+=a[i]*b[i];
     return s;
+  }
+#if defined(__x86_64__) && defined(__GNUC__)
+  __attribute__((target("avx2")))
+  static float vector_score(const float*a,const float*b,int d){
+    __m256 s0=_mm256_setzero_ps(),s1=s0,s2=s0,s3=s0;
+    int i=0;
+    for(;i+31<d;i+=32){
+       s0=_mm256_add_ps(s0,_mm256_mul_ps(
+           _mm256_loadu_ps(a+i),_mm256_loadu_ps(b+i)));
+       s1=_mm256_add_ps(s1,_mm256_mul_ps(
+           _mm256_loadu_ps(a+i+8),_mm256_loadu_ps(b+i+8)));
+       s2=_mm256_add_ps(s2,_mm256_mul_ps(
+           _mm256_loadu_ps(a+i+16),_mm256_loadu_ps(b+i+16)));
+       s3=_mm256_add_ps(s3,_mm256_mul_ps(
+           _mm256_loadu_ps(a+i+24),_mm256_loadu_ps(b+i+24)));
+    }
+    s0=_mm256_add_ps(_mm256_add_ps(s0,s1),_mm256_add_ps(s2,s3));
+    alignas(32) float result[8];
+    _mm256_store_ps(result,s0);
+    float v=0;
+    for(float f:result)v+=f;
+    for(;i<d;++i)v+=a[i]*b[i];
+    return v;
+  }
+#endif
+  using FastDot=float(*)(const float*,const float*,int);
+  static FastDot select_fast_dot(){
+#if defined(__x86_64__) && defined(__GNUC__)
+    if(__builtin_cpu_supports("avx2"))return &vector_score;
+#endif
+    return &scalar_score;
+  }
+  static float fast_score(const float*a,const float*b,int d){
+     static const FastDot scorer=select_fast_dot();
+     return scorer(a,b,d);
   }
   float score(const float*q,int32_t id,int32_t build_src=-1) const{
     // MIPS-to-sphere lift for insertion only. Each y=(x,sqrt(R^2-||x||^2))
