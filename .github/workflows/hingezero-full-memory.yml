@@ -1,0 +1,87 @@
+name: HingeZero standalone memory validation
+on:
+  push:
+    branches:
+      - hingezero-native-memory-vibe
+    paths:
+      - .github/workflows/hingezero-full-memory.yml
+      - vibe/algorithms/hingezero_full/**
+      - verification/smoke_hingezero_full.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  memory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMBA_NUM_THREADS: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONHASHSEED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install VIBE dependencies (no FAISS)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy==2.4.4 h5py==3.16.0 numba==0.65.1 psutil==7.2.2 polars==1.37.1 tqdm
+          python - <<'PY'
+          import numpy as np
+          assert hasattr(np,"bitwise_count")
+          print("numpy",np.__version__)
+          PY
+      - name: Test append-only persistence, witness, abstention and correct scoring
+        run: python verification/smoke_hingezero_full.py
+      - name: VIBE standalone HingeZero recall@100
+        run: |
+          python run.py --dataset yi-128-ip --algorithm hingezero-full --count 100 --runs 1 --parallelism 1 --local --force
+          python run.py --dataset yi-128-ip --algorithm hingezero-packed-control --count 100 --runs 1 --parallelism 1 --local --force
+      - name: Evaluate exact VIBE ground truth and build side-by-side scores
+        run: |
+          python export_results.py --parallelism 1 --skip-pca-mahalanobis
+          python - <<'PY'
+          import polars as pl
+          from pathlib import Path
+          import os
+          d=pl.read_parquet("results/summary.parquet")
+          d=d.filter(pl.col('algorithm').is_in(['hingezero-full','hingezero-packed-control']))
+          assert d.height==6, f"Expected 6 benchmark configurations, got {d.height}"
+          assert d['recall'].is_finite().all() and d['qps'].is_finite().all()
+          lines=[
+              '# HingeZero standalone VIBE GitHub-hosted result',
+              '',
+              'Dataset: yi-128-ip, recall@100, one benchmark core, one run/config.',
+              '',
+              '**Author-run, not independently certified by VIBE maintainers.**',
+              '',
+              '| Method | Recall@100 | QPS | Build seconds |',
+              '|---|---:|---:|---:|',
+          ]
+          for row in d.sort(['algorithm','qps'],descending=[False,True]).to_dicts():
+              lines.append(f"| {row['algorithm']} | {row['recall']:.5f} | {row['qps']:.2f} | {row['build_time']:.2f} |")
+          lines.extend(['', '1-bit signatures are a lossy index; original float32 vectors remain on disk.', 
+                        'The baseline shares the packed candidate index and original-vector reranking.'])
+          out='\n'.join(lines)+'\n'
+          print(out)
+          Path('results/HINGEZERO_FULL_MEMORY_REPORT.md').write_text(out)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write(out)
+          PY
+      - name: Upload benchmark records and score report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hingezero-standalone-memory-vibe
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            results/**/*.hdf5
+            results/summary.parquet
+            results/HINGEZERO_FULL_MEMORY_REPORT.md
+            vibe.log
