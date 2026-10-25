@@ -45,3 +45,22 @@ python export_results.py --parallelism 1 --skip-pca-mahalanobis
 
 CI re-runs the one HingeZero algorithm only and stores VIBE's raw scores.
 Measurements are author-operated, not independently certified by VIBE.
+
+## GitHub-hosted VIBE result (25 October 2026)
+
+[Successful single-algorithm GitHub Actions run](https://github.com/HingeZero/vibe/actions/runs/40166191634) · [raw score artifact](https://github.com/HingeZero/vibe/actions/runs/40166191634/artifacts/12588457303)
+
+| Dataset | Algorithm | Refinement iterations | Recall@100 | QPS |
+|---|---|---:|---:|---:|
+| yi-128-ip | hingezero | 0 | 1.00000 | 19.36 |
+
+One run, one benchmark CPU core, author-operated GitHub Actions. The source
+build, persistent append-prefix preservation, exact metric ranking on all four
+supported distances, stored-state witness and the zero-iteration no-bypass
+correctness checks passed. The zero-step mode explicitly calls the native
+HingeZero `refine(original,0)` function; it does **not** take a separate
+raw-search pathway.
+
+Because this is an **exact exhaustive whole-bank scan**, 100% recall@100
+should not be interpreted as a speed, capacity or accuracy breakthrough.
+The independent VIBE organizer has not accepted or certified these results.
