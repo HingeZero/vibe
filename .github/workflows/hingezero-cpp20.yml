@@ -1,8 +1,9 @@
-name: HingeZero original C++20 / VIBE full-bank
+name: HingeZero C++20 (0 steps) VIBE submission
 on:
   push:
     branches:
       - hingezero-cpp20-vibe
+      - hingezero-cpp-v3-vibe
     paths:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**
@@ -13,9 +14,9 @@ permissions:
   contents: read
 
 jobs:
-  benchmark:
+  vibe:
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 120
     env:
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
@@ -30,69 +31,59 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install VIBE evaluation dependencies
+      - name: Install VIBE dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install numpy==2.4.4 h5py==3.16.0 numba==0.65.1 psutil==7.2.2 polars==1.37.1 tqdm
-      - name: Compile unchanged original and VIBE-adapted C++20 kernels
+      - name: Compile original and adapted HingeZero with C++20
         run: |
-          g++ --version
           g++ -O3 -std=c++20 -ffp-contract=off vibe/algorithms/hingezero_cpp20/native/HingeZero_Native_1B.cpp -o "$HZ20_ORIGINAL_EXE"
           g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off vibe/algorithms/hingezero_cpp20/native/HingeZero_VIBE_Cpp20.cpp -o "$HINGEZERO_CPP20_LIB"
-          test -s "$HZ20_ORIGINAL_EXE"
-          test -s "$HINGEZERO_CPP20_LIB"
-      - name: Confirm original C++20 parity, append, native witness, all four VIBE metrics
+      - name: Prove zero-step HingeZero memory and metric correctness
         run: python verification/smoke_hingezero_cpp20.py
-      - name: VIBE yi-128-ip C++20 HingeZero (0 and 8 iterations)
+      - name: Run single submitted HingeZero C++20 algorithm
         run: |
-          python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero-cpp20-refined --count 100
-          python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero-cpp20-anchored --count 100
-          python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero-cpp20-zero --count 100
-      - name: Export validated official VIBE recall@100 and QPS
+          python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero --count 100
+      - name: Export single VIBE score
         run: |
           python export_results.py --parallelism 1 --skip-pca-mahalanobis
           python - <<'PY'
+          import polars as pl
           import os
           from pathlib import Path
-          import polars as pl
           d=pl.read_parquet("results/summary.parquet")
-          d=d.filter(pl.col("algorithm").is_in(["hingezero-cpp20-refined","hingezero-cpp20-anchored","hingezero-cpp20-zero"]))
-          assert d.height==3, f"Expected three C++20 official result rows; got {d.height}"
-          lines=[
-              "# HingeZero original C++20 VIBE floating-vector adaptation",
-              "",
-              "Original C++20 bipolar-source parity passed; VIBE yi-128-ip dataset;",
-              "full original-record float32 scan, no FAISS or sign-index shortlist.",
-              "",
-              "**Author-run GitHub Actions measurements; not organizer-certified.**",
-              "",
-              "| Method | VIBE recall@100 | QPS | Build seconds |",
-              "|---|---:|---:|---:|",
-          ]
-          for row in d.sort("algorithm").to_dicts():
-              assert 0<=row["recall"]<=1 and row["qps"]>0
-              lines.append(f"| {row['algorithm']} | {row['recall']:.5f} | {row['qps']:.2f} | {row['build_time']:.2f} |")
-          lines.extend(["",
-              "Zero-step control invokes the same native HingeZero refine/query/witness pathway;",
-              "zero iterations leave x_0 unmodified and still exhaustively scan the stored bank.",
-              "the C++20 HingeZero engine scans every original vector using its refined cue.",
-              "The anchored mode is an explicit 95% original / 5% refined real-vector adaptation.",
-              "Any drop in recall is genuine VIBE disagreement with the refined cue.",
-              "These are not approximate ANN index throughput results."])
-          report="\n".join(lines)+"\n"
-          Path("results/HINGEZERO_CPP20_REPORT.md").write_text(report)
-          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f:f.write(report)
+          d=d.filter(pl.col("algorithm")=="hingezero")
+          assert d.height==1, f"Expected exactly ONE HingeZero submission score, got {d.height}"
+          r=d.to_dicts()[0]
+          assert 0 <= r["recall"] <= 1 and r["qps"] > 0
+          report=("\n".join([
+            "# HingeZero C++20: single zero-refinement VIBE submission",
+            "",
+            "Dataset: yi-128-ip · k=100 · one CPU benchmark core · one run.",
+            "The native HingeZero refinement function runs with steps=0, NOT bypassed.",
+            "Search is an exhaustive full-bank float32 scan with witness checks.",
+            "Author-run GitHub measurement; not an organizer-certified score.",
+            "",
+            "| Recall@100 | QPS | Build seconds |",
+            "|---:|---:|---:|",
+            f"| {r['recall']:.5f} | {r['qps']:.2f} | {r['build_time']:.2f} |",
+            "",
+            "Exact exhaustive search can attain 100% recall by definition;",
+            "this does not demonstrate acceleration or a retrieval advantage over alternatives."
+          ])+"\n")
+          Path("results/HINGEZERO_CPP20_ZERO_REPORT.md").write_text(report)
+          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f: f.write(report)
           print(report)
           PY
-      - name: Attach benchmark scores, raw VIBE HDF5 and runner log
+      - name: Upload single submitted result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: hingezero-cpp20-original-adapted-vibe
+          name: hingezero-cpp20-zero-vibe
           retention-days: 30
           if-no-files-found: warn
           path: |
             results/**/*.hdf5
             results/summary.parquet
-            results/HINGEZERO_CPP20_REPORT.md
+            results/HINGEZERO_CPP20_ZERO_REPORT.md
             vibe.log

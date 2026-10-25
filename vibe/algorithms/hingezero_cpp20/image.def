@@ -7,7 +7,7 @@ From: base.sif
 %post
   set -eu
   g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off /opt/hingezero_cpp20/HingeZero_VIBE_Cpp20.cpp -o /opt/hingezero_cpp20/libhz20.so
-  /usr/bin/test -s /opt/hingezero_cpp20/libhz20.so
+  test -s /opt/hingezero_cpp20/libhz20.so
 
 %environment
   export HINGEZERO_CPP20_LIB=/opt/hingezero_cpp20/libhz20.so

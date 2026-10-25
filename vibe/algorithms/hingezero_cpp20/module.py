@@ -29,7 +29,7 @@ def _native():
     lib.hz20_open.argtypes = [ct.c_char_p, ct.c_uint64, ct.c_int, ct.c_int, ct.c_int]
     lib.hz20_open.restype = ct.c_void_p
     lib.hz20_query.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int32, ct.c_int,
-                                ct.c_int, ct.c_void_p, ct.c_void_p]
+                                ct.c_void_p, ct.c_void_p]
     lib.hz20_query.restype = ct.c_int
     lib.hz20_refine.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_int, ct.c_void_p]
     lib.hz20_refine.restype = ct.c_int
@@ -46,28 +46,26 @@ def _native():
 
 
 class HingeZeroCpp20(BaseANN):
-    """Original C++20 HingeZero memory mechanics adapted to arbitrary float32 d.
+    """Single submitted native HingeZero C++20 implementation.
 
-    'refined' ranks by the HZ-refined cue (faithful to the native 1B method).
-    'raw' is the same native, complete-bank, unrefined exact-distance control.
-    For arbitrary float embeddings, refinement may REDUCE standard VIBE recall:
-    that is a genuine experimental result, not a scoring error.
+    Refinement step count is fixed at zero, not bypassed. The HingeZero
+    refine() function validates and returns x_0 unchanged, then the same
+    native engine scans each float32 record and verifies the selected IDs.
     """
-    def __init__(self, metric, mode="refined", field_size=256, storage_path=None):
+
+    def __init__(self, metric, field_size=256, storage_path=None):
         if metric not in ("ip", "normalized", "cosine", "euclidean"):
             raise ValueError("Unsupported VIBE distance metric")
-        if mode not in ("refined", "anchored", "raw"):
-            raise ValueError("Mode must be refined, anchored or raw")
         if not 1 <= int(field_size) <= 8192:
             raise ValueError("Invalid field size")
-        self.metric, self.mode = metric, mode
+        self.metric = metric
         self.field_size, self.storage_path = int(field_size), storage_path
         self._tmp = None
         self.lib = None
         self.handle = None
         self.count = self.dimension = 0
         self.root = None
-        self.steps = 8 if mode in ("refined", "anchored") else 0
+        self.steps = 0
         self.refinement_ms = self.scan_ms = self.witness_count = self.queries = 0
         self.source_map = {}
 
@@ -197,11 +195,9 @@ class HingeZeroCpp20(BaseANN):
 
     def set_query_arguments(self, steps):
         steps = int(steps)
-        if steps < 0 or steps > 64:
-            raise ValueError("Invalid steps")
-        if self.mode == "raw" and steps != 0:
-            raise ValueError("Raw control must use zero steps")
-        self.steps = steps
+        if steps != 0:
+            raise ValueError("Submitted HingeZero C++20 runs exactly zero refinement steps")
+        self.steps = 0
 
     def query(self, vector, n):
         if not self.handle:
@@ -216,7 +212,7 @@ class HingeZeroCpp20(BaseANN):
         ids = np.empty(n,dtype=np.int32)
         timing = np.zeros(3,dtype=np.float64)
         self._check(self.lib.hz20_query(self.handle,ct.c_void_p(q.ctypes.data),
-                  n,self.steps,{"raw":0,"refined":1,"anchored":2}[self.mode],
+                  n,self.steps,
                   ct.c_void_p(ids.ctypes.data),ct.c_void_p(timing.ctypes.data)))
         if len(set(ids.tolist())) != n or np.any(ids<0) or np.any(ids>=self.count):
             raise RuntimeError("Native memory produced invalid IDs")
@@ -256,15 +252,7 @@ class HingeZeroCpp20(BaseANN):
         """Optional abstaining single-memory interface; VIBE requires k IDs."""
         take=min(self.count,2)
         ids=self.query(vector,take)
-        q=self.refined_vector(vector,self.steps) if self.mode!="raw" else np.asarray(vector,dtype=np.float32)
-        if self.mode=="anchored":
-            anchor=np.asarray(vector,dtype=np.float32)
-            length=float(np.linalg.norm(anchor))
-            if length>1e-12: anchor=anchor/length
-            q=0.95*anchor+0.05*q
-            q=q/(float(np.linalg.norm(q))+1e-12)
-        if self.metric=="euclidean" and self.mode!="raw":
-            q=q*float(np.linalg.norm(np.asarray(vector,dtype=np.float32)))
+        q=self.refined_vector(vector,0)
         vectors=np.stack([self.read_record(i) for i in ids]).astype(np.float64)
         q=q.astype(np.float64)
         if self.metric=="euclidean":
@@ -288,10 +276,10 @@ class HingeZeroCpp20(BaseANN):
 
     def get_additional(self):
         return {"engine":"C++20 full-bank HingeZero witness/recall",
-            "mode":self.mode,"anchoring":(0.05 if self.mode=="anchored" else 0.0),"binary_source_included":True,
+            "steps":0,"binary_source_included":True,
             "float32_bank":True,"bipolar_1b_data":False,
             "witness_checks":int(self.witness_count),
             "scan_ms_total":float(self.scan_ms),
             "refine_ms_total":float(self.refinement_ms)}
     def __str__(self):
-        return f"HingeZeroCpp20(metric={self.metric},mode={self.mode},field={self.field_size},steps={self.steps})"
+        return f"HingeZeroCpp20(metric={self.metric},field={self.field_size},steps=0)"
