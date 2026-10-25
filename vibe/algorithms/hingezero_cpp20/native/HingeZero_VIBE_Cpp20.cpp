@@ -207,6 +207,7 @@ struct MipsTree {
     uint32_t begin=0,end=0;
     int32_t left=-1,right=-1;
     vector<double> center;
+    vector<double> low,high;
     array<double,8> radius{};
     double max_norm=0;
   };
@@ -234,6 +235,8 @@ struct MipsTree {
     node.begin=begin;
     node.end=end;
     vector<double> sum(d,0),square(d,0);
+    vector<double> lo(d,numeric_limits<double>::infinity());
+    vector<double> hi(d,-numeric_limits<double>::infinity());
     double maxn=0;
     for(uint32_t pos=begin;pos<end;++pos) {
       const uint32_t id=order[pos];
@@ -242,11 +245,15 @@ struct MipsTree {
       for(int j=0;j<d;++j) {
         sum[j]+=v[j];
         square[j]+=double(v[j])*v[j];
+        lo[j]=min(lo[j],double(v[j]));
+        hi[j]=max(hi[j],double(v[j]));
       }
     }
     const double inverse=1.0/double(end-begin);
     for(int j=0;j<d;++j)sum[j]*=inverse;
     node.center=sum;
+    node.low=std::move(lo);
+    node.high=std::move(hi);
     node.max_norm=maxn;
     for(uint32_t pos=begin;pos<end;++pos) {
       const float*v=bank+size_t(order[pos])*d;
@@ -418,7 +425,10 @@ struct Memory{
           double projected=0;
           for(int j=0;j<d;++j)projected+=node.center[j]*q[j];
           for(int b=0;b<8;++b)projected+=qblock[b]*node.radius[b];
-          const double capped=min(projected,node.max_norm*nq);
+          double box=0;
+          for(int j=0;j<d;++j)
+            box+=double(q[j])*(q[j]>=0?node.high[j]:node.low[j]);
+          const double capped=min({projected,box,node.max_norm*nq});
           return capped+1e-6*(1.0+abs(capped));
         };
         struct Pending{double upper;int node;};
