@@ -6,6 +6,7 @@ on:
       - hingezero-cpp-v3-vibe
       - hingezero-cpp20-500qps-lab
       - hingezero-cpp20-500qps-two-tier
+      - hingezero-cpp20-500qps-fused-two-tier
     paths:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**

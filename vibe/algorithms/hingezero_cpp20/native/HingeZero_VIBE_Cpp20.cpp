@@ -376,50 +376,32 @@ struct Memory{
         const QuantDot approx_dot=choose_quant_dot();
         const QuantDot16 approx_dot16=choose_quant_dot16();
         const DotImpl exact_dot=select_dot_ip();
-        vector<Record> cheap_top;
-        cheap_top.reserve(k);
-        vector<double> bound(count);
-        const auto approx_consider=[&](Record rec) {
-          if(cheap_top.size()<size_t(k)){
-             cheap_top.push_back(rec);
-             push_heap(cheap_top.begin(),cheap_top.end(),better);
-          }else if(better(rec,cheap_top.front())){
-             pop_heap(cheap_top.begin(),cheap_top.end(),better);
-             cheap_top.back()=rec;
-             push_heap(cheap_top.begin(),cheap_top.end(),better);
-          }
-        };
-        for(uint64_t id=0;id<count;++id) {
-            const int8_t *row=idx->code.data()+size_t(id)*d;
-            const int64_t intdot=approx_dot(row,qcode.data(),d);
-            const double approximate=double(intdot)*idx->scales[id]*qscale;
-            // Cauchy bound includes record/query quantization error.
-            const double error=idx->residual_norm[id]*original_qnorm
-                      +idx->quant_norm[id]*qerr
-                      +1e-7*(1.0+abs(approximate));
-            bound[id]=approximate+error;
-            approx_consider(Record{int32_t(id),approximate});
-        }
-        vector<uint8_t> visited(count,0);
         int32_t exact_evaluations=0;
-        // Seed the exact top-k threshold; these are not assumed true neighbours.
-        for(const Record &r:cheap_top) {
-            consider(Record{r.id,exact_dot(bank+size_t(r.id)*d,q.data(),d)});
-            visited[r.id]=1;
+        for(int32_t seed=0;seed<k;++seed){
+            const uint64_t id=uint64_t(seed)*count/uint64_t(k);
+            consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
             ++exact_evaluations;
         }
-        for(uint64_t id=0;id<count;++id) {
-            if(visited[id])continue;
-            if(heap.size()==size_t(k) && bound[id]<heap.front().score)
+        int32_t seeded=0;
+        for(uint64_t id=0;id<count;++id){
+            if(seeded<k && id==uint64_t(seeded)*count/uint64_t(k)){
+                ++seeded;
                 continue;
+            }
+            const int8_t *row=idx->code.data()+size_t(id)*d;
+            const int64_t d8=approx_dot(row,qcode.data(),d);
+            const double ap8=double(d8)*idx->scales[id]*qscale;
+            const double er8=idx->residual_norm[id]*original_qnorm
+                      +idx->quant_norm[id]*qerr
+                      +1e-7*(1.0+abs(ap8));
+            if(ap8+er8<heap.front().score)continue;
             const int16_t* row16=idx->code16.data()+size_t(id)*d;
             const double ap16=double(approx_dot16(row16,qcode16.data(),d))
                                   *idx->scales16[id]*qscale16;
             const double er16=idx->residual16[id]*original_qnorm
                       +idx->quant16[id]*qerr16
                       +1e-7*(1.0+abs(ap16));
-            if(heap.size()==size_t(k) && ap16+er16<heap.front().score)
-                continue;
+            if(ap16+er16<heap.front().score)continue;
             consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
             ++exact_evaluations;
         }
