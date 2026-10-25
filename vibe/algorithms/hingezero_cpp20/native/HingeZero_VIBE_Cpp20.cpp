@@ -192,6 +192,7 @@ bool better(const Record&a,const Record&b){
 }
 struct Memory{
  int fd=-1,d,metric,field_limit;
+ int shortlist_budget=256;
  void* mapping=MAP_FAILED;
  const float*bank=nullptr;
  uint64_t count;
@@ -298,53 +299,32 @@ struct Memory{
     };
     if(metric==1 && certified) {
         const auto* idx=certified.get();
-        const auto qscale=CertifiedIndex::encoding_scale(q.data(),d);
+        const double qscale=CertifiedIndex::encoding_scale(q.data(),d);
         vector<int8_t> qcode(d);
-        double qerr=0,qn_quant=0;
-        CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&qn_quant);
-        const double original_qnorm=nq;
-        const QuantDot approx_dot=choose_quant_dot();
+        double qerr=0,quant_norm=0;
+        CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&quant_norm);
+        const QuantDot approximate_dot=choose_quant_dot();
         const DotImpl exact_dot=select_dot_ip();
-        vector<Record> cheap_top;
-        cheap_top.reserve(k);
-        vector<double> bound(count);
-        const auto approx_consider=[&](Record rec) {
-          if(cheap_top.size()<size_t(k)){
-             cheap_top.push_back(rec);
-             push_heap(cheap_top.begin(),cheap_top.end(),better);
-          }else if(better(rec,cheap_top.front())){
-             pop_heap(cheap_top.begin(),cheap_top.end(),better);
-             cheap_top.back()=rec;
-             push_heap(cheap_top.begin(),cheap_top.end(),better);
-          }
-        };
-        for(uint64_t id=0;id<count;++id) {
-            const int8_t *row=idx->code.data()+size_t(id)*d;
-            const int64_t intdot=approx_dot(row,qcode.data(),d);
-            const double approximate=double(intdot)*idx->scales[id]*qscale;
-            // Cauchy bound includes record/query quantization error.
-            const double error=idx->residual_norm[id]*original_qnorm
-                      +idx->quant_norm[id]*qerr
-                      +1e-7*(1.0+abs(approximate));
-            bound[id]=approximate+error;
-            approx_consider(Record{int32_t(id),approximate});
+        const int budget=min<int>(int(count),max<int>(k,shortlist_budget));
+        vector<Record> shortlist;
+        shortlist.reserve(budget);
+        for(uint64_t id=0;id<count;++id){
+            const int64_t raw=approximate_dot(
+                idx->code.data()+size_t(id)*d,qcode.data(),d);
+            const double estimate=double(raw)*idx->scales[id];
+            Record candidate{int32_t(id),estimate};
+            if(int(shortlist.size())<budget){
+                shortlist.push_back(candidate);
+                push_heap(shortlist.begin(),shortlist.end(),better);
+            }else if(better(candidate,shortlist.front())){
+                pop_heap(shortlist.begin(),shortlist.end(),better);
+                shortlist.back()=candidate;
+                push_heap(shortlist.begin(),shortlist.end(),better);
+            }
         }
-        vector<uint8_t> visited(count,0);
-        int32_t exact_evaluations=0;
-        // Seed the exact top-k threshold; these are not assumed true neighbours.
-        for(const Record &r:cheap_top) {
+        for(const Record &r:shortlist)
             consider(Record{r.id,exact_dot(bank+size_t(r.id)*d,q.data(),d)});
-            visited[r.id]=1;
-            ++exact_evaluations;
-        }
-        for(uint64_t id=0;id<count;++id) {
-            if(visited[id])continue;
-            if(heap.size()==size_t(k) && bound[id]<heap.front().score)
-                continue; // provably outside exact top-k
-            consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
-            ++exact_evaluations;
-        }
-        if(stats)stats[2]=double(exact_evaluations);
+        if(stats)stats[2]=double(shortlist.size());
     } else {
         for(uint64_t id=0;id<count;++id) {
             consider(Record{int32_t(id),score(bank+size_t(id)*d,q,nq)});
@@ -391,6 +371,11 @@ int hz20_refine(void*handle,const float*q,int steps,float*out)noexcept{
 int hz20_verify(void*handle,int64_t id,const float*state)noexcept{
   if(!handle)return -1;
   return static_cast<Memory*>(handle)->verify(id,state)?1:0;
+}
+int hz20_set_budget(void*handle,int budget)noexcept{
+  if(!handle||budget<100||budget>65536)return -1;
+  static_cast<Memory*>(handle)->shortlist_budget=budget;
+  return 0;
 }
 void hz20_close(void*handle)noexcept{delete static_cast<Memory*>(handle);}
 int hz20_append(const char*path,uint64_t previous,int dimension,

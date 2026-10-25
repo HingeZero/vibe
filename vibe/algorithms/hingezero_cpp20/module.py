@@ -32,6 +32,8 @@ def _native():
     lib.hz20_append.argtypes = [ct.c_char_p, ct.c_uint64, ct.c_int,
                                 ct.c_void_p, ct.c_uint64]
     lib.hz20_append.restype = ct.c_int
+    lib.hz20_set_budget.argtypes = [ct.c_void_p, ct.c_int]
+    lib.hz20_set_budget.restype = ct.c_int
     lib.hz20_close.argtypes = [ct.c_void_p]
     lib.hz20_close.restype = None
     if lib.hz20_abi() != 1:
@@ -55,6 +57,7 @@ class HingeZeroCpp20(BaseANN):
         self.count = self.dimension = 0
         self.root = None
         self.steps = 0
+        self.shortlist_budget = 256
         self.refinement_ms = self.scan_ms = self.witness_count = self.queries = 0
         self.source_map = {}
 
@@ -94,6 +97,7 @@ class HingeZeroCpp20(BaseANN):
         if not ptr:
             raise RuntimeError("HingeZero C++20 open: " + self._err())
         self.handle = ptr
+        self._check(self.lib.hz20_set_budget(self.handle,self.shortlist_budget))
 
     def _manifest(self):
         filename = self.root / "manifest.json"
@@ -182,11 +186,16 @@ class HingeZeroCpp20(BaseANN):
         self._mount()
         return self
 
-    def set_query_arguments(self, steps):
-        steps = int(steps)
+    def set_query_arguments(self, steps, budget=256):
+        steps,budget = int(steps),int(budget)
         if steps != 0:
-            raise ValueError("Submitted HingeZero C++20 runs exactly zero refinement steps")
+            raise ValueError("Experimental HingeZero VIBE runs exactly zero refinement steps")
+        if not 100 <= budget <= 65536:
+            raise ValueError("Budget out of bounds")
         self.steps = 0
+        self.shortlist_budget = budget
+        if self.handle:
+            self._check(self.lib.hz20_set_budget(self.handle,budget))
 
     def query(self, vector, n):
         if not self.handle:

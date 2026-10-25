@@ -5,6 +5,7 @@ on:
       - hingezero-cpp20-vibe
       - hingezero-cpp-v3-vibe
       - hingezero-cpp20-500qps-lab
+      - hingezero-cpp20-zero-maxqps-lab
     paths:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**
@@ -56,36 +57,15 @@ jobs:
         env:
           HZ500_REFERENCE_LIB: /tmp/hz500_reference.so
         run: python verification/benchmark_hz500_matched.py
-      - name: Export single VIBE score
+      - name: Export VIBE recall-throughput sweep
         run: |
           python export_results.py --parallelism 1 --skip-pca-mahalanobis
           python - <<'PY'
           import polars as pl
-          import os
-          from pathlib import Path
-          d=pl.read_parquet("results/summary.parquet")
-          d=d.filter(pl.col("algorithm")=="hingezero")
-          assert d.height==1, f"Expected exactly ONE HingeZero submission score, got {d.height}"
-          r=d.to_dicts()[0]
-          assert 0 <= r["recall"] <= 1 and r["qps"] > 0
-          report=("\n".join([
-            "# HingeZero C++20: single zero-refinement VIBE submission",
-            "",
-            "Dataset: yi-128-ip · k=100 · one CPU benchmark core · five timed runs.",
-            "The native HingeZero refinement function runs with steps=0, NOT bypassed.",
-            "Search checks compact int16 score bounds, exact original float32 candidates and native witness integrity.",
-            "Author-run GitHub measurement; not an organizer-certified score.",
-            "",
-            "| Recall@100 | QPS | Build seconds |",
-            "|---:|---:|---:|",
-            f"| {r['recall']:.5f} | {r['qps']:.2f} | {r['build_time']:.2f} |",
-            "",
-            "The candidate bounds preserve exact top-100 retrieval on this dataset;",
-            "official independent review and comparisons with other ANN indexes remain pending."
-          ])+"\n")
-          Path("results/HINGEZERO_CPP20_ZERO_REPORT.md").write_text(report)
-          with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f: f.write(report)
-          print(report)
+          data=pl.read_parquet("results/summary.parquet").filter(pl.col("algorithm")=="hingezero")
+          for r in sorted(data.to_dicts(),key=lambda r:r["qps"],reverse=True):
+              print(f"VIBE_SWEEP recall={r['recall']:.7f} qps={r['qps']:.2f} build={r['build_time']:.2f} params={r['params']}",flush=True)
+          print("SWEEP_100_PERCENT="+str([(r["qps"],r["params"]) for r in data.to_dicts() if r["recall"]==1.0]),flush=True)
           PY
       - name: Upload single submitted result
         if: always()
