@@ -260,7 +260,7 @@ struct Memory{
     if(!original||!out||k<1||uint64_t(k)>count)
        throw runtime_error("invalid query");
     auto t0=chrono::steady_clock::now();
-    if(steps!=0) throw runtime_error("submitted HingeZero step count must be zero");
+    if(steps!=2) throw runtime_error("two-step research branch requires exactly two refinements");
     Vec q=refine(original,steps);
     auto t1=chrono::steady_clock::now();
     double nq=0;for(float x:q)nq+=double(x)*x;nq=sqrt(nq);

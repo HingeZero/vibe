@@ -184,9 +184,9 @@ class HingeZeroCpp20(BaseANN):
 
     def set_query_arguments(self, steps):
         steps = int(steps)
-        if steps != 0:
-            raise ValueError("Submitted HingeZero C++20 runs exactly zero refinement steps")
-        self.steps = 0
+        if steps != 2:
+            raise ValueError("Two-step HingeZero VIBE experiment requires exactly two refinement steps")
+        self.steps = 2
 
     def query(self, vector, n):
         if not self.handle:

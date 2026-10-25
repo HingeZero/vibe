@@ -13,4 +13,4 @@ float:
           args:
             field_size: [256]
           query_args:
-            steps: [0]
+            steps: [2]

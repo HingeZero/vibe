@@ -1,4 +1,4 @@
-"""Verify submitted zero-iteration C++20 HingeZero, no alternate benchmark mode."""
+"""Verify two-step C++20 HingeZero against brute-force refined-cue ranking."""
 import hashlib
 import json
 import os
@@ -45,15 +45,20 @@ def run():
             assert not reopened.witness(1024,corrupted)
             cue=rng.normal(size=128).astype(np.float32)
             if metric=="normalized":cue/=np.linalg.norm(cue)
-            reopened.set_query_arguments(0)
-            assert np.array_equal(reopened.refined_vector(cue,0),cue), "zero-step modified initial cue"
+            assert np.array_equal(reopened.refined_vector(cue,0),cue)
+            reopened.set_query_arguments(2)
+            refined=reopened.refined_vector(cue,2)
+            assert np.isfinite(refined).all()
+            assert not np.array_equal(refined,cue), "Two-step refinement did not run"
+            assert np.array_equal(refined,reopened.refined_vector(cue,2))
             try:
-                reopened.set_query_arguments(8)
-                raise AssertionError("Invalid nonzero step configuration accepted")
+                reopened.set_query_arguments(0)
+                raise AssertionError("The research VIBE setting accepted zero steps")
             except ValueError:
                 pass
+            reopened.set_query_arguments(2)
             ids=reopened.query(cue,100)
-            c=cue.astype(np.float64)
+            c=refined.astype(np.float64)
             if metric=="euclidean":
                 scores=-np.sum((bank-c)**2,axis=1)
             elif metric=="cosine":
@@ -61,12 +66,12 @@ def run():
             else:
                 scores=bank@c
             expected=np.lexsort((np.arange(len(bank)),-scores))[:100]
-            assert np.array_equal(ids,expected),metric+" native zero-step search misranked"
+            assert np.array_equal(ids,expected),metric+" native two-step refined-cue search misranked"
             assert len(ids)==len(set(ids))==100
             assert reopened.witness(int(ids[0]),reopened.read_record(int(ids[0])))
-            assert reopened.get_additional()["steps"]==0
-            print(metric,"HINGEZERO_CPP20_ZERO_STEPS_PASS")
-    print("SINGLE HINGEZERO CPP20 SUBMISSION SMOKE PASS")
+            assert reopened.get_additional()["steps"]==2
+            print(metric,"HINGEZERO_CPP20_TWO_STEPS_PASS")
+    print("SINGLE HINGEZERO CPP20 TWO-STEP SMOKE PASS")
 
 if __name__=="__main__":
     run()
