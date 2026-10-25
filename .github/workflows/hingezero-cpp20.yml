@@ -9,6 +9,8 @@ on:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**
       - verification/smoke_hingezero_cpp20.py
+      - verification/reference_cpp20_scalar.cpp
+      - verification/benchmark_cpp20_speed.py
   workflow_dispatch:
 
 permissions:
@@ -43,6 +45,13 @@ jobs:
       - name: Report runner CPU and supported SIMD
         run: |
           lscpu | grep -E 'Model name|Architecture|CPU\(s\)|Flags' | cut -c1-350
+      - name: Build prior scalar C++20 reference (not submitted)
+        run: |
+          g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off verification/reference_cpp20_scalar.cpp -o /tmp/libhz20_scalar.so
+      - name: Same-run scalar versus SIMD zero-step speed, identical top100
+        env:
+          HZ20_SCALAR_LIB: /tmp/libhz20_scalar.so
+        run: python verification/benchmark_cpp20_speed.py
       - name: Prove zero-step HingeZero memory and metric correctness
         run: python verification/smoke_hingezero_cpp20.py
       - name: Run single submitted HingeZero C++20 algorithm
