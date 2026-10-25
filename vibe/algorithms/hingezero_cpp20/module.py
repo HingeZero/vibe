@@ -197,11 +197,11 @@ class HingeZeroCpp20(BaseANN):
     def set_query_arguments(self, steps, nprobe=16):
         steps = int(steps)
         nprobe = int(nprobe)
+        if steps != 0:
+            raise ValueError("Submitted HingeZero C++20 runs exactly zero refinement steps")
         if not 1 <= nprobe <= min(128, self.count):
             raise ValueError('Invalid number of native coarse clusters to probe')
         self.nprobe = nprobe
-        if steps != 0:
-            raise ValueError("Submitted HingeZero C++20 runs exactly zero refinement steps")
         self.steps = 0
 
     def query(self, vector, n):
