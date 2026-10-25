@@ -9,8 +9,9 @@ float:
       ood: false
       base_args: ['@metric']
       run_groups:
-        native-cpp20:
+        single-cpp20-ann:
           args:
             field_size: [256]
           query_args:
             steps: [0]
+            ef_search: [128, 256, 512, 1024, 2048]

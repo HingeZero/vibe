@@ -12,6 +12,8 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <queue>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
@@ -179,6 +181,8 @@ struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
 }
+#include "HingeZero_ANN_Graph.hpp"
+
 struct Memory{
  int fd=-1,d,metric,field_limit;
  void* mapping=MAP_FAILED;
@@ -187,6 +191,7 @@ struct Memory{
  size_t bytes;
  vector<Vec> field;
  unique_ptr<CertifiedIndex> certified;
+ unique_ptr<GraphANN> ann_graph;
  Memory(const char*path,uint64_t n,int dimensions,int m,int limit):
    d(dimensions),metric(m),field_limit(limit),count(n){
   if(!path||d<1||d>65536||n<1||n>uint64_t(INT32_MAX)||
@@ -211,7 +216,7 @@ struct Memory{
       for(float x:v)if(!isfinite(x))throw runtime_error("nonfinite field");
       unit(v);field.push_back(std::move(v));
     }
-    if(metric==1)certified=make_unique<CertifiedIndex>(bank,count,d);
+    if(metric==1)ann_graph=make_unique<GraphANN>(bank,count,d);
   }catch(...){
     if(mapping!=MAP_FAILED)::munmap(mapping,bytes);
     ::close(fd);mapping=MAP_FAILED;fd=-1;throw;
@@ -267,7 +272,7 @@ struct Memory{
    if(metric==2)return nr>0&&nq>0?s/(sqrt(nr)*nq):0;
    return s;
  }
- void query(const float*original,int32_t k,int steps,
+ void query(const float*original,int32_t k,int steps,int ef_search,
             int32_t*out,double*stats)const{
     if(!original||!out||k<1||uint64_t(k)>count)
        throw runtime_error("invalid query");
@@ -278,10 +283,10 @@ struct Memory{
     Vec q=refine(original,steps);
     auto t1=chrono::steady_clock::now();
     double nq=0;for(float x:q)nq+=double(x)*x;nq=sqrt(nq);
-    // Full original-record scan exactly as the source billion-memory variant.
-    // Only the score function differs to preserve the real VIBE metric.
+    // C++20 HingeZero navigable graph selects ANN candidate memories.
+    // Candidate reranking and witnesses use original float32 bank.
     vector<Record> heap;heap.reserve(k);
-    // Top-k heap identical to the unoptimised native HingeZero scanner.
+    // HingeZero exact top-k ranking of navigated candidates.
     auto consider=[&](Record candidate) {
       if(heap.size()<size_t(k)) {
          heap.push_back(candidate);
@@ -292,59 +297,15 @@ struct Memory{
          push_heap(heap.begin(),heap.end(),better);
       }
     };
-    if(metric==1 && certified) {
-        const auto* idx=certified.get();
-        const auto qscale=CertifiedIndex::encoding_scale(q.data(),d);
-        vector<int16_t> qcode(d);
-        double qerr=0,qn_quant=0;
-        CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&qn_quant);
-        const double original_qnorm=nq;
-        const QuantDot approx_dot=choose_quant_dot();
+    if(metric==1 && ann_graph) {
+        const int ef=std::max(k,ef_search);
+        const auto shortlist=ann_graph->candidates(q.data(),ef);
         const DotImpl exact_dot=select_dot_ip();
-        vector<Record> cheap_top;
-        cheap_top.reserve(k);
-        vector<double> bound(count);
-        const auto approx_consider=[&](Record rec) {
-          if(cheap_top.size()<size_t(k)){
-             cheap_top.push_back(rec);
-             push_heap(cheap_top.begin(),cheap_top.end(),better);
-          }else if(better(rec,cheap_top.front())){
-             pop_heap(cheap_top.begin(),cheap_top.end(),better);
-             cheap_top.back()=rec;
-             push_heap(cheap_top.begin(),cheap_top.end(),better);
-          }
-        };
-        for(uint64_t id=0;id<count;++id) {
-            const int16_t *row=idx->code.data()+size_t(id)*d;
-            const int64_t intdot=approx_dot(row,qcode.data(),d);
-            const double approximate=double(intdot)*idx->scales[id]*qscale;
-            // Triangle inequality:
-            // x.q - xq.qq = (x-xq).q + xq.(q-qq).
-            // A numerical guard handles float/double rounding.
-            const double error=idx->residual_norm[id]*original_qnorm
-                      +idx->quant_norm[id]*qerr
-                      +1e-7*(1.0+abs(approximate));
-            bound[id]=approximate+error;
-            approx_consider(Record{int32_t(id),approximate});
+        for(const auto &match:shortlist) {
+            const float*state=bank+size_t(match.id)*d;
+            consider(Record{match.id,exact_dot(state,q.data(),d)});
         }
-        vector<uint8_t> visited(count,0);
-        int32_t exact_evaluations=0;
-        // Establish a legitimate exact score threshold using the highest
-        // approximate-score candidates. This does not assume they are true NN.
-        for(const Record &r:cheap_top) {
-            consider(Record{r.id,exact_dot(bank+size_t(r.id)*d,q.data(),d)});
-            visited[r.id]=1;
-            ++exact_evaluations;
-        }
-        for(uint64_t id=0;id<count;++id) {
-            if(visited[id])continue;
-            if(heap.size()==size_t(k) && bound[id]<heap.front().score)
-                continue; // provably outside exact top-k
-            consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
-            ++exact_evaluations;
-        }
-        // Expose exact evaluation count without changing the C ABI.
-        if(stats)stats[2]=double(exact_evaluations);
+        if(stats)stats[2]=double(shortlist.size());
     } else {
         for(uint64_t id=0;id<count;++id) {
             consider(Record{int32_t(id),score(bank+size_t(id)*d,q,nq)});
@@ -373,11 +334,11 @@ void* hz20_open(const char*path,uint64_t n,int d,int metric,int field)noexcept{
   try{last_error.clear();return new Memory(path,n,d,metric,field);}
   catch(const exception&ex){last_error=ex.what();return nullptr;}
 }
-int hz20_query(void*handle,const float*q,int32_t k,int steps,
+int hz20_query(void*handle,const float*q,int32_t k,int steps,int ef_search,
                int32_t*ids,double*stats)noexcept{
   try{
     if(!handle)throw runtime_error("null memory handle");
-    static_cast<Memory*>(handle)->query(q,k,steps,ids,stats);
+    static_cast<Memory*>(handle)->query(q,k,steps,ef_search,ids,stats);
     return 0;
   }catch(const exception&ex){last_error=ex.what();return -1;}
 }
