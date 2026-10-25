@@ -73,3 +73,23 @@ The indexed prototype remains available on this separate lab
 branch for future accuracy/speed work. A 96.435%-recall,
 578-QPS configuration should **not** silently replace a 100%-recall
 submission.
+
+## High-recall ANN experiment — 25 October 2026
+
+The first native C++20 HingeZero navigable graph produced weak
+recall on VIBE `yi-128-ip`. The graph's best result was 11.01%
+recall@100, and a norm-corrected MIPS graph reached 67.64%
+at 185.51 QPS; the graph route is not ready for submission.
+
+This separate IVF branch uses the **same one native C++20 HingeZero
+ANN candidate engine**, with zero refinement iterations and
+the original float32 memory/witness pipeline. It sweeps
+`nprobe=[64,80,96,104,112,120,128]` of 128 coarse clusters to
+measure whether >=99% recall can be obtained with meaningfully
+better QPS than the current exact submission.
+
+This is **not** a claim of reaching 5,000 QPS. The experiment is
+valuable only if the measured QPS at a fixed recall threshold
+is competitive. Do not choose parameters using VIBE test-query
+ground-truth IDs; inspect reported metrics only for scientific
+evaluation, then seek independent measurements.

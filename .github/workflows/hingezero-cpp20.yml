@@ -5,6 +5,7 @@ on:
       - hingezero-cpp20-vibe
       - hingezero-cpp-v3-vibe
       - hingezero-cpp20-index-lab
+      - hingezero-cpp20-ann-ivf-high-recall
     paths:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**
@@ -61,7 +62,7 @@ jobs:
           from pathlib import Path
           d=pl.read_parquet("results/summary.parquet")
           d=d.filter(pl.col("algorithm")=="hingezero")
-          assert d.height==6, f"Expected 6 index probe configurations, got {d.height}"
+          assert d.height==7, f"Expected seven IVF high-recall probe configurations, got {d.height}"
           rows=d.to_dicts()
           for r in rows:
               assert 0<=r["recall"]<=1 and r["qps"]>0
