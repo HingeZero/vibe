@@ -1,3 +1,4 @@
+#include <queue>
 // VIBE float32 adaptation of HingeZero_Native_1B.cpp (David Duffy).
 #include <algorithm>
 #include <bit>
