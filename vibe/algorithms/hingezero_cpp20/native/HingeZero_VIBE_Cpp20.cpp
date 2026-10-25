@@ -108,7 +108,7 @@ struct CertifiedIndex {
     double err2=0,norm2=0;
     for(int j=0;j<d;++j) {
       long long z=llround(double(v[j])/scale);
-      z=max(-long long(LIMIT),min(long long(LIMIT),z));
+      z=max(-static_cast<long long>(LIMIT),min(static_cast<long long>(LIMIT),z));
       dst[j]=int16_t(z);
       double approx=double(z)*scale;
       double delta=double(v[j])-approx;
