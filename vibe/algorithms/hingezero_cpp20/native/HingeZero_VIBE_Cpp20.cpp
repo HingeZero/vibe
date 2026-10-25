@@ -132,38 +132,51 @@ struct CertifiedIndex {
 };
 
 
-int64_t quant_dot_scalar(const int8_t*a,const int8_t*b,int d) {
-  int64_t result=0;
-  for(int j=0;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
-  return result;
+
+int64_t quant_dot_scalar(const int8_t*a,const int8_t*b,int d,int64_t correction) {
+    (void)correction;
+    int64_t sum=0;
+    for(int j=0;j<d;++j)sum+=int32_t(a[j])*int32_t(b[j]);
+    return sum;
 }
 #if defined(__x86_64__) && defined(__GNUC__)
 __attribute__((target("avx2")))
-int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d) {
-  // Widen signed int8 to signed int16 before pairwise multiply-add.
-  // This avoids saturation that can occur with unsigned/signed pmaddubsw.
-  __m256i acc=_mm256_setzero_si256();
+int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d,int64_t correction) {
+  // VPMADDUBSW multiplies unsigned record bytes by signed query bytes.
+  // Record bytes shifted by +128; query values deliberately <=63.
+  // Per-pair product <= 2*255*63 = 32130, avoiding signed16 saturation.
+  const __m256i offset=_mm256_set1_epi8(char(0x80));
+  const __m256i ones=_mm256_set1_epi16(1);
+  __m256i sums=_mm256_setzero_si256();
   int j=0;
+  for(;j+63<d;j+=64) {
+      const __m256i au=_mm256_add_epi8(
+          _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j)),offset);
+      const __m256i aq=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j));
+      const __m256i bu=_mm256_add_epi8(
+          _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j+32)),offset);
+      const __m256i bq=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j+32));
+      const __m256i p1=_mm256_maddubs_epi16(au,aq);
+      const __m256i p2=_mm256_maddubs_epi16(bu,bq);
+      sums=_mm256_add_epi32(sums,_mm256_add_epi32(
+           _mm256_madd_epi16(p1,ones),_mm256_madd_epi16(p2,ones)));
+  }
   for(;j+31<d;j+=32){
-     const __m128i a0=_mm_loadu_si128(reinterpret_cast<const __m128i*>(a+j));
-     const __m128i a1=_mm_loadu_si128(reinterpret_cast<const __m128i*>(a+j+16));
-     const __m128i b0=_mm_loadu_si128(reinterpret_cast<const __m128i*>(b+j));
-     const __m128i b1=_mm_loadu_si128(reinterpret_cast<const __m128i*>(b+j+16));
-     const __m256i v0=_mm256_madd_epi16(
-         _mm256_cvtepi8_epi16(a0),_mm256_cvtepi8_epi16(b0));
-     const __m256i v1=_mm256_madd_epi16(
-         _mm256_cvtepi8_epi16(a1),_mm256_cvtepi8_epi16(b1));
-     acc=_mm256_add_epi32(acc,_mm256_add_epi32(v0,v1));
+      const __m256i au=_mm256_add_epi8(
+          _mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j)),offset);
+      const __m256i q=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j));
+      sums=_mm256_add_epi32(sums,_mm256_madd_epi16(
+          _mm256_maddubs_epi16(au,q),ones));
   }
   alignas(32) int32_t lanes[8];
-  _mm256_store_si256(reinterpret_cast<__m256i*>(lanes),acc);
-  int64_t total=0;
-  for(int lane=0;lane<8;++lane)total+=lanes[lane];
-  for(;j<d;++j)total+=int32_t(a[j])*int32_t(b[j]);
-  return total;
+  _mm256_store_si256(reinterpret_cast<__m256i*>(lanes),sums);
+  int64_t result=-correction;
+  for(int i=0;i<8;++i)result+=lanes[i];
+  for(;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
+  return result;
 }
 #endif
-using QuantDot=int64_t(*)(const int8_t*,const int8_t*,int);
+using QuantDot=int64_t(*)(const int8_t*,const int8_t*,int,int64_t);
 QuantDot choose_quant_dot(){
 #if defined(__x86_64__) && defined(__GNUC__)
   if(__builtin_cpu_supports("avx2"))return &quant_dot_avx2;
@@ -290,10 +303,13 @@ struct Memory{
     };
     if(metric==1 && certified) {
         const auto* idx=certified.get();
-        const auto qscale=CertifiedIndex::encoding_scale(q.data(),d);
+        const auto qscale=CertifiedIndex::encoding_scale(q.data(),d) * (127.0/63.0);
         vector<int8_t> qcode(d);
         double qerr=0,qn_quant=0;
         CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&qn_quant);
+        int64_t qsum=0;
+        for(int8_t z:qcode)qsum+=z;
+        const int64_t shift_correction=128*qsum;
         const double original_qnorm=nq;
         const QuantDot approx_dot=choose_quant_dot();
         const DotImpl exact_dot=select_dot_ip();
@@ -312,7 +328,7 @@ struct Memory{
         };
         for(uint64_t id=0;id<count;++id) {
             const int8_t *row=idx->code.data()+size_t(id)*d;
-            const int64_t intdot=approx_dot(row,qcode.data(),d);
+            const int64_t intdot=approx_dot(row,qcode.data(),d,shift_correction);
             const double approximate=double(intdot)*idx->scales[id]*qscale;
             // Triangle inequality:
             // x.q - xq.qq = (x-xq).q + xq.(q-qq).

@@ -19,3 +19,16 @@ pruning must remain correctness-preserving.
 
 Do not update upstream PR until GitHub VIBE and exact-ID parity
 pass, and measured throughput exceeds the current ~288–292 QPS.
+
+## AVX2 signed-int8 optimised candidate kernel
+
+GitHub initial five-run VIBE result: **332.20 QPS, recall@100 1.00000**.
+[Original 8-bit benchmark](https://github.com/HingeZero/vibe/actions/runs/40170356490).
+The next experiment changes only integer arithmetic: the signed int8
+record is offset by +128 inside AVX2, then `_mm256_maddubs_epi16`
+and `_mm256_madd_epi16` accumulate the integer inner product.
+Query quantization is restricted to [-63,63] to prevent intermediate
+int16 saturation; subtracting 128*sum(query_codes) exactly undoes
+the unsigned record offset. The query's larger quantization scale
+is propagated into the Cauchy bound. 100% top-100 recall remains
+a mandatory acceptance test, not a presupposition.
