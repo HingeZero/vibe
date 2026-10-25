@@ -29,3 +29,24 @@ the goal is a VIBE-specific memory indexing implementation for HingeZero,
 not claiming invention of the general graph navigation technique.
 Original VIBE pull request #16 is **not modified** until validation
 establishes a meaningfully competitive result.
+
+## Initial graph benchmark diagnosis and MIPS lift experiment
+
+[Graph v1 VIBE run](https://github.com/HingeZero/vibe/actions/runs/40173668235)
+produced 7.11–11.01% recall@100 across ef_search 128–2048.
+Despite 502–3,766 QPS, the first graph failed ANN quality. Build 124.72s.
+
+The correction here is to **construct the graph in a metric-compatible
+transformed space**: y=(x,sqrt(R²-||x||²)), with R² slightly larger
+than the corpus maximum ||x||². Then ||y|| is constant and graph-build
+navigation is related to Euclidean distance between corpus vectors.
+For VIBE queries transformed to (q,0), the search similarity
+is q·y=q·x, preserving maximum-inner-product candidate ranking.
+
+This conversion is established MIPS indexing prior art, not a
+new HingeZero mathematical claim. It changes only graph construction;
+the original memory bank, zero-step HingeZero cue, real float32
+inner-product reranking, and witness validation remain unchanged.
+Larger M/efConstruction are an intentional build-time/recall tradeoff.
+
+No promotion unless recall and QPS materially justify it.

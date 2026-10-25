@@ -14,10 +14,12 @@ struct GraphANN {
   const float *bank;
   int d;
   uint64_t n;
-  int m0=24, m=12, ef_build=70;
+  int m0=32, m=16, ef_build=96;
   int32_t entry=0, max_layer=0;
   std::vector<Node> nodes;
   std::vector<float> norms;
+  std::vector<float> lift;
+  double radius_sq=0;
   static uint64_t mix(uint64_t &seed){
      uint64_t z=(seed+=0x9e3779b97f4a7c15ULL);
      z=(z^(z>>30))*0xbf58476d1ce4e5b9ULL;
@@ -30,12 +32,17 @@ struct GraphANN {
     for(int i=0;i<d;++i) s+=a[i]*b[i];
     return s;
   }
-  float score(const float*q,int32_t id) const{
-    return fast_score(q,bank+size_t(id)*d,d);
+  float score(const float*q,int32_t id,int32_t build_src=-1) const{
+    // MIPS-to-sphere lift for insertion only. Each y=(x,sqrt(R^2-||x||^2))
+    // has ||y||=R. Build graph by neighbour similarity in lifted space.
+    // Query is (q,0), so q.y = q.x; true VIBE MIPS ranking is preserved.
+    float s=fast_score(q,bank+size_t(id)*d,d);
+    if(build_src>=0)s+=lift[build_src]*lift[id];
+    return s;
   }
   float diversity(const int32_t a,const int32_t b)const {
-    const float result=fast_score(bank+size_t(a)*d,bank+size_t(b)*d,d);
-    return result/(norms[a]*norms[b]+1e-10f);
+    const float xy=fast_score(bank+size_t(a)*d,bank+size_t(b)*d,d);
+    return float((double(xy)+double(lift[a])*lift[b])/radius_sq);
   }
   int sampled_level(uint64_t &seed) const {
     // Exponentially decreasing number of upper-layer vertices.
@@ -44,15 +51,15 @@ struct GraphANN {
     int lvl=int(-std::log(u)*(1.0/std::log(double(m))));
     return std::min(lvl,8);
   }
-  int32_t walk(const float*q,int32_t start,int layer)const {
+  int32_t walk(const float*q,int32_t start,int layer,int32_t build_src=-1)const {
      int32_t current=start;
-     float best=score(q,current);
+     float best=score(q,current,build_src);
      bool changed=true;
      while(changed){
        changed=false;
        const auto &neigh=nodes[current].edges[layer];
        for(int32_t cand:neigh){
-         float s=score(q,cand);
+         float s=score(q,cand,build_src);
          if(s>best || (s==best && cand<current)){
            best=s;current=cand;changed=true;
          }
@@ -60,7 +67,7 @@ struct GraphANN {
      }
      return current;
   }
-  std::vector<Match> explore(const float*q,int32_t start,int ef,int layer)const {
+  std::vector<Match> explore(const float*q,int32_t start,int ef,int layer,int32_t build_src=-1)const {
      // VIBE uses one benchmark core. Stamp visited per-thread to keep
      // the query path safe and avoid O(n) reset per query.
      static thread_local std::vector<uint32_t> seen;
@@ -70,7 +77,7 @@ struct GraphANN {
      using Item=std::pair<float,int32_t>;
      std::priority_queue<Item> frontier;
      std::priority_queue<Item,std::vector<Item>,std::greater<Item>> best;
-     const float init=score(q,start);
+     const float init=score(q,start,build_src);
      frontier.emplace(init,start);
      best.emplace(init,start);
      seen[start]=epoch;
@@ -81,7 +88,7 @@ struct GraphANN {
        for(int32_t id:adj){
          if(seen[id]==epoch)continue;
          seen[id]=epoch;
-         const float sim=score(q,id);
+         const float sim=score(q,id,build_src);
          if(best.size()<size_t(ef)||sim>best.top().first){
            frontier.emplace(sim,id);
            best.emplace(sim,id);
@@ -110,7 +117,7 @@ struct GraphANN {
        if(cand.id==owner)continue;
        bool redundant=false;
        for(int32_t prev:selected){
-         if(diversity(cand.id,prev)>0.985f) {
+         if(diversity(cand.id,prev)>0.99f) {
            redundant=true;break;
          }
        }
@@ -137,7 +144,7 @@ struct GraphANN {
      std::vector<Match> pool;
      pool.reserve(neigh.size());
      const float*q=bank+size_t(from)*d;
-     for(int32_t id:neigh)pool.push_back(Match{score(q,id),id});
+     for(int32_t id:neigh)pool.push_back(Match{score(q,id,from),id});
      std::sort(pool.begin(),pool.end(),[](const Match&a,const Match&b){
        return a.score==b.score?a.id<b.id:a.score>b.score;
      });
@@ -147,7 +154,7 @@ struct GraphANN {
      neigh.swap(selected);
   }
   GraphANN(const float*original,uint64_t count,int dimension):
-       bank(original),d(dimension),n(count),nodes(count),norms(count) {
+       bank(original),d(dimension),n(count),nodes(count),norms(count),lift(count) {
      if(!bank||n<1||d<1||n>uint64_t(INT32_MAX))
        throw std::runtime_error("Invalid HingeZero ANN corpus");
      for(uint64_t i=0;i<n;++i){
@@ -155,6 +162,11 @@ struct GraphANN {
        const float*p=bank+size_t(i)*d;
        for(int j=0;j<d;++j)mag+=double(p[j])*p[j];
        norms[i]=float(std::sqrt(mag));
+       radius_sq=std::max(radius_sq,mag);
+     }
+     radius_sq*=1.00001; // avoid negative lift due to float rounding
+     for(uint64_t i=0;i<n;++i) {
+        lift[i]=float(std::sqrt(std::max(0.0,radius_sq-double(norms[i])*norms[i])));
      }
      uint64_t seed=0x8c1ee0d41239b1a7ULL;
      max_layer=sampled_level(seed);
@@ -166,9 +178,9 @@ struct GraphANN {
        const float*q=bank+size_t(id)*d;
        int32_t cur=entry;
        // Greedy skip-layers cannot access the unconnected new node.
-       for(int l=max_layer;l>layer;--l)cur=walk(q,cur,l);
+       for(int l=max_layer;l>layer;--l)cur=walk(q,cur,l,id);
        for(int l=std::min(layer,max_layer);l>=0;--l){
-         const auto pool=explore(q,cur,ef_build,l);
+         const auto pool=explore(q,cur,ef_build,l,id);
          if(pool.empty())throw std::runtime_error("HingeZero empty ANN build layer");
          const auto chosen=select_neighbors(id,pool,l==0?m0:m);
          for(int32_t other:chosen){
