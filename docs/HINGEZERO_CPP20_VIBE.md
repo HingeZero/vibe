@@ -13,14 +13,17 @@ The paired `native/HingeZero_VIBE_Cpp20.cpp` is the adapted backend needed
 because VIBE's vectors are arbitrary real numbers, not exact bipolar patterns.
 Using one bit per coordinate would destroy magnitude and precision. The
 adapted bank therefore stores float32 vectors exactly on disk (4*d bytes/record),
-supports append without rewriting prior records, and uses a mapped whole-bank
-C++20 search with original VIBE distance metrics and record-identity witnesses.
+supports append without rewriting prior records, and uses a memory-mapped
+C++20 exact-candidate scoring engine with certified 16-bit pruning on inner-product
+data, original VIBE distance metrics, and record-identity witnesses.
 
 For each query, **the same HingeZero pipeline always runs**:
 1. Validate input and invoke the native `refine(query, 0)` function; it
    returns `x_0` unchanged and executes **zero** dual-tanh iterations.
-2. Exhaustively scan the stored memory bank with the original cue using
-   the dataset's exact metric.
+2. Scan compact 16-bit score signatures for every stored memory, rejecting an
+   expensive original-vector score only when a conservative upper bound proves
+   it cannot enter the exact top 100. Potential winners are scored in their
+   original float32 representation using the dataset's true metric.
 3. Return the top 100 ranked stored IDs after stored-state witness checks.
 
 The iterative dual-tanh mechanism is retained in the source engine, but is
@@ -46,7 +49,12 @@ python export_results.py --parallelism 1 --skip-pca-mahalanobis
 CI re-runs the one HingeZero algorithm only and stores VIBE's raw scores.
 Measurements are author-operated, not independently certified by VIBE.
 
-## GitHub-hosted VIBE result (25 October 2026)
+## Historical baseline VIBE result (25 October 2026)
+
+The following 19.36 QPS run predates subsequent SIMD and certified-pruning
+optimisations; it is **not** the current performance of the submission.
+
+
 
 [Successful single-algorithm GitHub Actions run](https://github.com/HingeZero/vibe/actions/runs/40166191634) · [raw score artifact](https://github.com/HingeZero/vibe/actions/runs/40166191634/artifacts/12588457303)
 
@@ -61,7 +69,7 @@ correctness checks passed. The zero-step mode explicitly calls the native
 HingeZero `refine(original,0)` function; it does **not** take a separate
 raw-search pathway.
 
-Because this is an **exact exhaustive whole-bank scan**, 100% recall@100
+Because this historical run used an **exact exhaustive whole-bank scan**, 100% recall@100
 should not be interpreted as a speed, capacity or accuracy breakthrough.
 The independent VIBE organizer has not accepted or certified these results.
 
@@ -93,7 +101,7 @@ performance on VIBE's official leaderboard CPU. The difference arises
 from CPU arithmetic optimisation, not from HingeZero nonlinear iterations
 (which remain at zero) or a new approximate index.
 
-## Certified C++20 exact-pruning acceleration — 25 October 2026
+## Current C++20 exact-pruning acceleration — 25 October 2026
 
 The submitted HingeZero configuration remains **steps=0**, and no FAISS or
 second algorithm is registered. The search engine preserves the original
@@ -135,3 +143,18 @@ float32 records per query**, compared with 187,843 in exhaustive scoring,
 because 16-bit score bounds safely rejected the rest. Every stored
 quantized signature was still scanned, so these numbers do not demonstrate
 constant-time query cost. No external VIBE maintainer verification is claimed.
+
+
+### Current pull-request validation
+
+The final **single registered algorithm** on VIBE PR #16 has passed its own
+five-run GitHub Actions CI after promoting certified pruning:
+
+- [Successful PR-branch benchmark](https://github.com/HingeZero/vibe/actions/runs/40169154193)
+  ([raw result artifact](https://github.com/HingeZero/vibe/actions/runs/40169154193/artifacts/12589211994))
+- `yi-128-ip`: **recall@100=1.00000**, **287.76 QPS**, build time **0.19 seconds**.
+- Compiler, append integrity, exact ranking on IP/normalised/L2/cosine,
+  stored-state witness and zero-step no-bypass smoke tests all passed.
+- This is author-operated GitHub testing on one benchmark CPU core, **not**
+  certified VIBE leaderboard performance. Extra quantization/index RAM is
+  disclosed above, and no sublinear worst-case query guarantee is claimed.
