@@ -286,15 +286,21 @@ struct Memory{
     };
     if(metric==1 && certified) {
         const auto* idx=certified.get();
-        double qorigin=0,qscale=0;
-        CertifiedIndex::range(q.data(),d,&qorigin,&qscale);
-        vector<uint64_t> qlow(idx->blocks),qhigh(idx->blocks);
-        uint32_t qdigits=0;
-        double qerr=0,qn_quant=0;
-        CertifiedIndex::pack(q.data(),d,qorigin,qscale,
-           qlow.data(),qhigh.data(),&qdigits,&qerr,&qn_quant);
+        const int octets=(d+7)/8;
+        vector<double> table(size_t(octets)*256,0);
+        double sumq=0;
+        for(int t=0;t<octets;++t) {
+            double *tab=table.data()+size_t(t)*256;
+            for(int mask=1;mask<256;++mask) {
+                const int bit=std::countr_zero(unsigned(mask));
+                const int j=t*8+bit;
+                tab[mask]=tab[mask^(1<<bit)]+(j<d?double(q[j]):0);
+            }
+        }
+        for(float v:q)sumq+=double(v);
+        const auto* qt=table.data();
+        const int bl=idx->blocks;
         const double original_qnorm=nq;
-        const DigitDot digit_dot=choose_digit_dot();
         const DotImpl exact_dot=select_dot_ip();
         vector<Record> cheap_top;
         cheap_top.reserve(k);
@@ -311,17 +317,16 @@ struct Memory{
         };
         for(uint64_t id=0;id<count;++id) {
             const auto row=size_t(id)*idx->blocks;
-            const int64_t sum=digit_dot(
-              idx->low.data()+row,idx->high.data()+row,
-              qlow.data(),qhigh.data(),idx->blocks);
-            const double approximate=
-              double(d)*idx->origins[id]*qorigin
-              +idx->origins[id]*qscale*qdigits
-              +qorigin*idx->scales[id]*idx->digits[id]
-              +idx->scales[id]*qscale*double(sum);
-            // Cauchy bound includes record/query quantization error.
+            const auto* l=reinterpret_cast<const uint8_t*>(idx->low.data()+row);
+            const auto* h=reinterpret_cast<const uint8_t*>(idx->high.data()+row);
+            double signed_sum=0;
+            for(int t=0;t<octets;++t) {
+                const double*tab=qt+size_t(t)*256;
+                signed_sum+=tab[l[t]]+2.0*tab[h[t]];
+            }
+            const double approximate=idx->origins[id]*sumq
+                 +idx->scales[id]*signed_sum;
             const double error=idx->residual_norm[id]*original_qnorm
-                      +idx->quant_norm[id]*qerr
                       +1e-7*(1.0+abs(approximate));
             bound[id]=approximate+error;
             approx_consider(Record{int32_t(id),approximate});
