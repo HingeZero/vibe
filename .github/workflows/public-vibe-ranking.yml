@@ -1,0 +1,51 @@
+name: Read public VIBE leaderboard snapshot
+on:
+  push:
+    branches:
+      - vibe-official-leaderboard-check-20261025
+    paths:
+      - .github/workflows/public-vibe-ranking.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ranking:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Read current official published leaderboard
+        run: |
+          python -m pip install --quiet polars==1.37.1
+          curl --fail --location --retry 3 --silent --show-error \
+            https://raw.githubusercontent.com/vector-index-bench/vector-index-bench.github.io/main/results/summary.parquet -o /tmp/vibe-summary.parquet
+          curl --fail --location --retry 3 --silent --show-error \
+            https://raw.githubusercontent.com/vector-index-bench/vector-index-bench.github.io/main/algorithms_basics.csv -o /tmp/vibe-algorithms.csv
+          python - <<'PY'
+          import polars as pl
+          summary=pl.read_parquet('/tmp/vibe-summary.parquet')
+          basics=pl.read_csv('/tmp/vibe-algorithms.csv')
+          print("SNAPSHOT ROWS",len(summary),"DATASETS",summary.select('dataset').n_unique())
+          print("COLUMN TYPES",summary.schema)
+          rows=(summary.join(basics,on='algorithm',how='left')
+                .filter((pl.col('dataset')=='yi-128-ip')&(pl.col('k')==100)&
+                        (pl.col('is_gpu')==False)))
+          print("YI128 k100 CPU CONFIGS",len(rows),"DISTINCT METHODS",rows.select('algorithm').n_unique())
+          print("RECALL_RANGE",rows['recall'].min(),rows['recall'].max())
+          for threshold in (0.95,0.99,0.999,1.0,0):
+              selected=(rows.filter(pl.col('recall')>=threshold)
+                        .sort('qps',descending=True)
+                        .unique(subset=['algorithm'],keep='first',maintain_order=True)
+                        .head(10))
+              print("RANKING_START",threshold,"methods",len(selected))
+              for i,r in enumerate(selected.iter_rows(named=True),1):
+                  print("RANK",threshold,i,r['algorithm'],"qps",round(r['qps'],2),
+                        "recall",round(r['recall'],6),"build_s",round(r['build_time'],2),
+                        "params",str(r['params'])[:160])
+              print("RANKING_END",threshold)
+          PY
