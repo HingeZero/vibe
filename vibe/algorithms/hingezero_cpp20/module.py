@@ -35,6 +35,8 @@ def _native():
     lib.hz20_refine.restype = ct.c_int
     lib.hz20_exact_lookup.argtypes = [ct.c_void_p, ct.c_void_p, ct.POINTER(ct.c_int32)]
     lib.hz20_exact_lookup.restype = ct.c_int
+    lib.hz20_exact_lookup_batch.argtypes = [ct.c_void_p, ct.c_void_p, ct.c_uint64, ct.c_void_p]
+    lib.hz20_exact_lookup_batch.restype = ct.c_int
     lib.hz20_get_by_id.argtypes = [ct.c_void_p, ct.c_int64, ct.c_void_p]
     lib.hz20_get_by_id.restype = ct.c_int
     lib.hz20_verify.argtypes = [ct.c_void_p, ct.c_int64, ct.c_void_p]
@@ -274,6 +276,22 @@ class HingeZeroCpp20(BaseANN):
             raise RuntimeError("Exact-memory key differs from witnessed state")
         return {"status":"exact","id":record_id,"source":self.source_map.get(
             record_id,f"vibe:{record_id}"),"verified":True,"vector":state}
+
+    def lookup_exact_batch(self, vectors):
+        """Native batched exact-identity recall; outputs -1 for absent records.
+
+        Runs inside the same memory engine. This is NOT a k-NN search.
+        """
+        if not self.handle: raise RuntimeError("HingeZero memory not mounted")
+        vectors=np.asarray(vectors,dtype=np.float32)
+        if vectors.ndim!=2 or vectors.shape[1]!=self.dimension or not np.isfinite(vectors).all():
+            raise ValueError("Expected finite NxD exact-memory cues")
+        x=np.ascontiguousarray(vectors)
+        ids=np.empty(x.shape[0],dtype=np.int32)
+        if len(ids):
+            self._check(self.lib.hz20_exact_lookup_batch(
+                self.handle,ct.c_void_p(x.ctypes.data),len(ids),ct.c_void_p(ids.ctypes.data)))
+        return ids
 
     def lookup_by_id(self, record_id):
         """Direct, witnessed native memory retrieval: O(d), O(1) in bank size."""

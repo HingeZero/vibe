@@ -236,6 +236,16 @@ struct Memory{
    *out=id;
    return 1;
  }
+ int exact_lookup_batch(const float*keys,uint64_t batch,int32_t*out)const{
+   if(!keys||!out||batch>uint64_t(INT32_MAX))
+       throw runtime_error("Invalid exact lookup batch");
+   for(uint64_t i=0;i<batch;++i){
+       int32_t matched=-1;
+       const int status=exact_lookup(keys+size_t(i)*d,&matched);
+       out[i]=status==1?matched:-1;
+   }
+   return 0;
+ }
  int read_by_id(int64_t id,float*out)const{
    if(!out)throw runtime_error("Null HingeZero memory destination");
    if(id<0||uint64_t(id)>=count)return 0;
@@ -416,6 +426,12 @@ int hz20_exact_lookup(void*handle,const float*key,int32_t*found_id)noexcept{
   try{
     if(!handle)throw runtime_error("Null exact-memory handle");
     return static_cast<Memory*>(handle)->exact_lookup(key,found_id);
+  }catch(const exception&ex){last_error=ex.what();return -1;}
+}
+int hz20_exact_lookup_batch(void*handle,const float*keys,uint64_t n,int32_t*ids)noexcept{
+  try{
+    if(!handle)throw runtime_error("Null batch-memory handle");
+    return static_cast<Memory*>(handle)->exact_lookup_batch(keys,n,ids);
   }catch(const exception&ex){last_error=ex.what();return -1;}
 }
 int hz20_get_by_id(void*handle,int64_t id,float*out_state)noexcept{

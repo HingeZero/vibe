@@ -46,11 +46,11 @@ jobs:
         run: python verification/smoke_hingezero_cpp20.py
       - name: Verify direct and exact-memory O(1)-in-bank access
         run: python verification/smoke_hingezero_hybrid.py
-      - name: Benchmark exact retrieval separately from VIBE top-100 QPS
-        run: python verification/benchmark_hingezero_exact.py
       - name: Run single submitted HingeZero C++20 algorithm
         run: |
           python run.py --local --force --runs 5 --parallelism 1 --dataset yi-128-ip --algorithm hingezero --count 100
+      - name: Benchmark exact retrieval separately from VIBE top-100 QPS
+        run: python verification/benchmark_hingezero_exact.py
       - name: Export single VIBE score
         run: |
           python export_results.py --parallelism 1 --skip-pca-mahalanobis
