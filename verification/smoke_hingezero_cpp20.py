@@ -44,6 +44,7 @@ def run():
         bad=record.copy();bad[3]=0
         assert not obj.witness(417,bad)
         obj.set_query_arguments(0)
+        assert np.array_equal(obj.refined_vector(cue,0),cue), "x_0 must equal the original cue"
         exact=obj.query(cue,100)
         # Exact original-metric full scan with no HZ against source bipolar bank.
         expected=np.lexsort((np.arange(len(vectors)),
@@ -89,6 +90,14 @@ def run():
                 scores=v@q64
             ground=np.lexsort((np.arange(len(v)),-scores))[:100]
             assert np.array_equal(ids,ground),f"native exact metric {metric} disagrees with ground truth"
+            # CRUCIAL: zero steps via HingeZero, not raw-mode bypass.
+            hz_zero=HingeZeroCpp20(metric,mode="refined").load_memory(root)
+            hz_zero.set_query_arguments(0)
+            assert np.array_equal(hz_zero.refined_vector(q,0),q), f"{metric}: zero steps altered x0"
+            zero_ids=hz_zero.query(q,100)
+            assert np.array_equal(zero_ids,ground),f"{metric}: HingeZero zero-step recall mismatch"
+            assert hz_zero.witness(int(zero_ids[0]),hz_zero.read_record(int(zero_ids[0])))
+            assert hz_zero.get_additional()["mode"]=="refined"
             anchored=HingeZeroCpp20(metric,mode="anchored").load_memory(root)
             anchored.set_query_arguments(8)
             adaptation=anchored.query(q,100)
