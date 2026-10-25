@@ -265,10 +265,10 @@ class HingeZeroCpp20(BaseANN):
 
     def get_additional(self):
         return {"engine":"C++20 full-bank HingeZero witness/recall",
-            "steps":0,"binary_source_included":True,
+            "steps":int(self.steps),"binary_source_included":True,
             "float32_bank":True,"bipolar_1b_data":False,
             "witness_checks":int(self.witness_count),
             "scan_ms_total":float(self.scan_ms),
             "refine_ms_total":float(self.refinement_ms)}
     def __str__(self):
-        return f"HingeZeroCpp20(metric={self.metric},field={self.field_size},steps=0)"
+        return f"HingeZeroCpp20(metric={self.metric},field={self.field_size},steps={self.steps})"
