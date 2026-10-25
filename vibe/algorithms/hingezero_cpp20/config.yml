@@ -1,0 +1,47 @@
+float:
+  any:
+    - name: hingezero-cpp20-refined
+      module: vibe.algorithms.hingezero_cpp20
+      constructor: HingeZeroCpp20
+      singularity_image: hingezero_cpp20
+      disabled: false
+      gpu: false
+      ood: false
+      base_args: ['@metric']
+      run_groups:
+        full-bank:
+          args:
+            mode: ["refined"]
+            field_size: [256]
+          query_args:
+            steps: [8]
+    - name: hingezero-cpp20-anchored
+      module: vibe.algorithms.hingezero_cpp20
+      constructor: HingeZeroCpp20
+      singularity_image: hingezero_cpp20
+      disabled: false
+      gpu: false
+      ood: false
+      base_args: ['@metric']
+      run_groups:
+        real-vector-anchored:
+          args:
+            mode: ["anchored"]
+            field_size: [256]
+          query_args:
+            steps: [8]
+    - name: hingezero-cpp20-raw
+      module: vibe.algorithms.hingezero_cpp20
+      constructor: HingeZeroCpp20
+      singularity_image: hingezero_cpp20
+      disabled: false
+      gpu: false
+      ood: false
+      base_args: ['@metric']
+      run_groups:
+        raw-control:
+          args:
+            mode: ["raw"]
+            field_size: [256]
+          query_args:
+            steps: [0]
