@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/hingezero-mips-research.yml
       - verification/research_mips_geometry.py
+      - verification/research_hotspot.py
   workflow_dispatch:
 permissions:
   contents: read
@@ -35,3 +36,5 @@ jobs:
         run: python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero --count 100
       - name: Diagnose PCA energy and exact top-100 pruning feasibility
         run: python verification/research_mips_geometry.py
+      - name: Measure learn-query hotspot index coverage
+        run: python verification/research_hotspot.py
