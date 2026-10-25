@@ -57,7 +57,7 @@ class HingeZeroCpp20(BaseANN):
         self.count = self.dimension = 0
         self.root = None
         self.steps = 0
-        self.shortlist_budget = 256
+        self.shortlist_budget = 224
         self.refinement_ms = self.scan_ms = self.witness_count = self.queries = 0
         self.source_map = {}
 
@@ -186,7 +186,7 @@ class HingeZeroCpp20(BaseANN):
         self._mount()
         return self
 
-    def set_query_arguments(self, steps, budget=256):
+    def set_query_arguments(self, steps, budget=224):
         steps,budget = int(steps),int(budget)
         if steps != 0:
             raise ValueError("Experimental HingeZero VIBE runs exactly zero refinement steps")

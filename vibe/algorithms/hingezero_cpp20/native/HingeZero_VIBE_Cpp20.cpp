@@ -192,7 +192,7 @@ bool better(const Record&a,const Record&b){
 }
 struct Memory{
  int fd=-1,d,metric,field_limit;
- int shortlist_budget=256;
+ int shortlist_budget=224;
  void* mapping=MAP_FAILED;
  const float*bank=nullptr;
  uint64_t count;
