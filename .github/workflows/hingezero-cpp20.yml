@@ -7,11 +7,13 @@ on:
       - hingezero-cpp20-500qps-lab
       - hingezero-cpp20-zero-maxqps-lab
       - hingezero-cpp20-zero-q16fast-lab
+      - hingezero-cpp20-zero-isa-compare-lab
     paths:
       - .github/workflows/hingezero-cpp20.yml
       - vibe/algorithms/hingezero_cpp20/**
       - verification/smoke_hingezero_cpp20.py
       - verification/benchmark_hz500_matched.py
+      - verification/benchmark_zero_samehost.py
   workflow_dispatch:
 
 permissions:
@@ -49,6 +51,10 @@ jobs:
         run: |
           git show 8406576d16f60c990770b053f58d59feeb7b4f13:vibe/algorithms/hingezero_cpp20/native/HingeZero_VIBE_Cpp20.cpp > /tmp/hz500_reference.cpp
           g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off /tmp/hz500_reference.cpp -o /tmp/hz500_reference.so
+      - name: Compile the earlier 8-bit-query algorithm on the same worker
+        run: |
+          git show 1cedb133281c0c1d8ab1b7da7528aa7067a03122:vibe/algorithms/hingezero_cpp20/native/HingeZero_VIBE_Cpp20.cpp > /tmp/hz8_reference.cpp
+          g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off /tmp/hz8_reference.cpp -o /tmp/libhz20_q8.so
       - name: Prove zero-step HingeZero memory and metric correctness
         run: python verification/smoke_hingezero_cpp20.py
       - name: Run single submitted HingeZero C++20 algorithm
@@ -58,6 +64,8 @@ jobs:
         env:
           HZ500_REFERENCE_LIB: /tmp/hz500_reference.so
         run: python verification/benchmark_hz500_matched.py
+      - name: Same-worker query precision comparison with exact ID parity
+        run: python verification/benchmark_zero_samehost.py
       - name: Export VIBE recall-throughput sweep
         run: |
           python export_results.py --parallelism 1 --skip-pca-mahalanobis

@@ -14,4 +14,4 @@ float:
             field_size: [256]
           query_args:
             steps: [0]
-            budget: [100, 112, 128, 144, 160, 176, 192, 208, 224, 240, 256, 320]
+            budget: [208]
