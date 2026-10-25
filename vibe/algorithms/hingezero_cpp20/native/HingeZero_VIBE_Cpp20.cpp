@@ -123,14 +123,14 @@ struct CertifiedIndex {
 };
 
 
-int64_t quant_dot_scalar(const int8_t*a,const int8_t*b,int d) {
+int64_t quant_dot_scalar(const int8_t*a,const int8_t*b,int d,int64_t) {
   int64_t result=0;
   for(int j=0;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
   return result;
 }
 #if defined(__x86_64__) && defined(__GNUC__)
 __attribute__((target("avx2")))
-int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d) {
+int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d,int64_t) {
   // Widen signed int8 to signed int16 before pairwise multiply-add.
   // This avoids saturation that can occur with unsigned/signed pmaddubsw.
   __m256i acc=_mm256_setzero_si256();
@@ -156,7 +156,7 @@ int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d) {
 #endif
 #if defined(__x86_64__) && defined(__GNUC__)
 __attribute__((target("avx512f,avx512bw")))
-int64_t quant_dot_avx512(const int8_t*a,const int8_t*b,int d){
+int64_t quant_dot_avx512(const int8_t*a,const int8_t*b,int d,int64_t){
    __m512i sum=_mm512_setzero_si512();
    int j=0;
    for(;j+63<d;j+=64){
@@ -177,9 +177,29 @@ int64_t quant_dot_avx512(const int8_t*a,const int8_t*b,int d){
    return result;
 }
 #endif
-using QuantDot=int64_t(*)(const int8_t*,const int8_t*,int);
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx512f,avx512bw,avx512vnni")))
+int64_t quant_dot_vnni(const int8_t*a,const int8_t*b,int d,int64_t bias){
+    __m512i sum=_mm512_setzero_si512();
+    const __m512i bit=_mm512_set1_epi8(char(0x80));
+    int j=0;
+    for(;j+63<d;j+=64){
+       const auto av=_mm512_loadu_si512(reinterpret_cast<const void*>(a+j));
+       const auto bv=_mm512_loadu_si512(reinterpret_cast<const void*>(b+j));
+       sum=_mm512_dpbusd_epi32(sum,_mm512_xor_si512(av,bit),bv);
+    }
+    alignas(64) int32_t lane[16];
+    _mm512_store_si512(reinterpret_cast<void*>(lane),sum);
+    int64_t result=-bias;
+    for(int i=0;i<16;++i)result+=lane[i];
+    for(;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
+    return result;
+}
+#endif
+using QuantDot=int64_t(*)(const int8_t*,const int8_t*,int,int64_t);
 QuantDot choose_quant_dot(){
 #if defined(__x86_64__) && defined(__GNUC__)
+  if(__builtin_cpu_supports("avx512vnni"))return &quant_dot_vnni;
   if(__builtin_cpu_supports("avx512bw"))return &quant_dot_avx512;
   if(__builtin_cpu_supports("avx2"))return &quant_dot_avx2;
 #endif
@@ -304,6 +324,8 @@ struct Memory{
         CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&qn_quant);
         const double original_qnorm=nq;
         const QuantDot approx_dot=choose_quant_dot();
+        int64_t vnni_bias=0;
+        for(int j=0;j<(d/64)*64;++j)vnni_bias+=int64_t(qcode[j])*128;
         const DotImpl exact_dot=select_dot_ip();
         vector<Record> cheap_top;
         cheap_top.reserve(k);
@@ -320,7 +342,7 @@ struct Memory{
         };
         for(uint64_t id=0;id<count;++id) {
             const int8_t *row=idx->code.data()+size_t(id)*d;
-            const int64_t intdot=approx_dot(row,qcode.data(),d);
+            const int64_t intdot=approx_dot(row,qcode.data(),d,vnni_bias);
             const double approximate=double(intdot)*idx->scales[id]*qscale;
             // Cauchy bound includes record/query quantization error.
             const double error=idx->residual_norm[id]*original_qnorm
