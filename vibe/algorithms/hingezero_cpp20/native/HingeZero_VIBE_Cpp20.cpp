@@ -127,29 +127,15 @@ struct Memory{
    if(metric==2)return nr>0&&nq>0?s/(sqrt(nr)*nq):0;
    return s;
  }
- void query(const float*original,int32_t k,int steps,int enabled,
+ void query(const float*original,int32_t k,int steps,
             int32_t*out,double*stats)const{
     if(!original||!out||k<1||uint64_t(k)>count)
        throw runtime_error("invalid query");
     auto t0=chrono::steady_clock::now();
-    Vec q;
-    if(enabled){
-       q=refine(original,steps);
-       if(enabled==2 && steps>0) {
-          // VIBE adaptation only: preserve most original-query evidence.
-          // The original binary kernel (enabled==1) remains untouched.
-          Vec anchor(original,original+d); unit(anchor);
-          for(int j=0;j<d;++j)q[j]=0.95f*anchor[j]+0.05f*q[j];
-          unit(q);
-       }
-       if(metric==0 && steps>0){
-         double a=0;for(int j=0;j<d;++j)a+=double(original[j])*original[j];
-         for(float&v:q)v*=float(sqrt(a));
-       }
-    }else{
-       q.assign(original,original+d);
-       for(float v:q)if(!isfinite(v))throw runtime_error("nonfinite cue");
-    }
+    // Single HingeZero pipeline: prepare the initial state in refine()
+    // then perform all-memory search and witnessed validation. No bypass.
+    if(steps!=0) throw runtime_error("submitted HingeZero step count must be zero");
+    Vec q=refine(original,steps);
     auto t1=chrono::steady_clock::now();
     double nq=0;for(float x:q)nq+=double(x)*x;nq=sqrt(nq);
     // Full original-record scan exactly as the source billion-memory variant.
@@ -189,11 +175,11 @@ void* hz20_open(const char*path,uint64_t n,int d,int metric,int field)noexcept{
   try{last_error.clear();return new Memory(path,n,d,metric,field);}
   catch(const exception&ex){last_error=ex.what();return nullptr;}
 }
-int hz20_query(void*handle,const float*q,int32_t k,int steps,int refined,
+int hz20_query(void*handle,const float*q,int32_t k,int steps,
                int32_t*ids,double*stats)noexcept{
   try{
     if(!handle)throw runtime_error("null memory handle");
-    static_cast<Memory*>(handle)->query(q,k,steps,refined,ids,stats);
+    static_cast<Memory*>(handle)->query(q,k,steps,ids,stats);
     return 0;
   }catch(const exception&ex){last_error=ex.what();return -1;}
 }
