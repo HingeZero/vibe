@@ -25,3 +25,14 @@ python run.py --local --dataset yi-128-ip --algorithm hingezero-cpp20-raw --coun
 \`\`\`
 
 The attached GitHub Actions workflow compiles original + adapted C++20, checks parity with the original 128-bit pattern bank, verifies append-prefix preservation and native witnesses, and measures both variants through the VIBE runner. Results are author-run until accepted by VIBE maintainers.
+
+
+## VIBE real-valued query-anchoring (third variant)
+
+\`hingezero-cpp20-anchored\` preserves the *original C++20 field, nonlinearity
+and eight-step refinement*, then chooses an experimentally explicit
+**95% original-unit-query / 5% refined-query** direction before the full scan.
+This aims to avoid distorting native real-valued IP ranking merely due to a
+uniform-evidence field. It is a deliberate **dataset adaptation**, not the
+unaltered original binary-engine score or proof of improved index performance.
+The unchanged \`refined\` and exact \`raw\` modes remain controls.

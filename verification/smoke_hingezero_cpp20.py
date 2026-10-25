@@ -89,6 +89,10 @@ def run():
                 scores=v@q64
             ground=np.lexsort((np.arange(len(v)),-scores))[:100]
             assert np.array_equal(ids,ground),f"native exact metric {metric} disagrees with ground truth"
+            anchored=HingeZeroCpp20(metric,mode="anchored").load_memory(root)
+            anchored.set_query_arguments(8)
+            adaptation=anchored.query(q,100)
+            assert len(adaptation)==len(set(adaptation))==100
             hz=HingeZeroCpp20(metric,mode="refined").load_memory(root)
             hz.set_query_arguments(8)
             refined=hz.query(q,100)

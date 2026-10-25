@@ -131,6 +131,13 @@ struct Memory{
     Vec q;
     if(enabled){
        q=refine(original,steps);
+       if(enabled==2) {
+          // VIBE adaptation only: preserve most original-query evidence.
+          // The original binary kernel (enabled==1) remains untouched.
+          Vec anchor(original,original+d); unit(anchor);
+          for(int j=0;j<d;++j)q[j]=0.95f*anchor[j]+0.05f*q[j];
+          unit(q);
+       }
        if(metric==0){
          double a=0;for(int j=0;j<d;++j)a+=double(original[j])*original[j];
          for(float&v:q)v*=float(sqrt(a));

@@ -56,8 +56,8 @@ class HingeZeroCpp20(BaseANN):
     def __init__(self, metric, mode="refined", field_size=256, storage_path=None):
         if metric not in ("ip", "normalized", "cosine", "euclidean"):
             raise ValueError("Unsupported VIBE distance metric")
-        if mode not in ("refined", "raw"):
-            raise ValueError("Mode must be refined or raw")
+        if mode not in ("refined", "anchored", "raw"):
+            raise ValueError("Mode must be refined, anchored or raw")
         if not 1 <= int(field_size) <= 8192:
             raise ValueError("Invalid field size")
         self.metric, self.mode = metric, mode
@@ -216,7 +216,7 @@ class HingeZeroCpp20(BaseANN):
         ids = np.empty(n,dtype=np.int32)
         timing = np.zeros(3,dtype=np.float64)
         self._check(self.lib.hz20_query(self.handle,ct.c_void_p(q.ctypes.data),
-                  n,self.steps,int(self.mode=="refined"),
+                  n,self.steps,{"raw":0,"refined":1,"anchored":2}[self.mode],
                   ct.c_void_p(ids.ctypes.data),ct.c_void_p(timing.ctypes.data)))
         if len(set(ids.tolist())) != n or np.any(ids<0) or np.any(ids>=self.count):
             raise RuntimeError("Native memory produced invalid IDs")
@@ -256,7 +256,15 @@ class HingeZeroCpp20(BaseANN):
         """Optional abstaining single-memory interface; VIBE requires k IDs."""
         take=min(self.count,2)
         ids=self.query(vector,take)
-        q=self.refined_vector(vector,self.steps) if self.mode=="refined" else np.asarray(vector,dtype=np.float32)
+        q=self.refined_vector(vector,self.steps) if self.mode!="raw" else np.asarray(vector,dtype=np.float32)
+        if self.mode=="anchored":
+            anchor=np.asarray(vector,dtype=np.float32)
+            length=float(np.linalg.norm(anchor))
+            if length>1e-12: anchor=anchor/length
+            q=0.95*anchor+0.05*q
+            q=q/(float(np.linalg.norm(q))+1e-12)
+        if self.metric=="euclidean" and self.mode!="raw":
+            q=q*float(np.linalg.norm(np.asarray(vector,dtype=np.float32)))
         vectors=np.stack([self.read_record(i) for i in ids]).astype(np.float64)
         q=q.astype(np.float64)
         if self.metric=="euclidean":
@@ -280,7 +288,7 @@ class HingeZeroCpp20(BaseANN):
 
     def get_additional(self):
         return {"engine":"C++20 full-bank HingeZero witness/recall",
-            "mode":self.mode,"binary_source_included":True,
+            "mode":self.mode,"anchoring":(0.05 if self.mode=="anchored" else None),"binary_source_included":True,
             "float32_bank":True,"bipolar_1b_data":False,
             "witness_checks":int(self.witness_count),
             "scan_ms_total":float(self.scan_ms),
