@@ -64,6 +64,7 @@ jobs:
           python export_results.py --parallelism 1 --skip-pca-mahalanobis
           python - <<'PY'
           import polars as pl
+          import os
           data=pl.read_parquet("results/summary.parquet").filter(pl.col("algorithm")=="hingezero")
           from pathlib import Path
           assert data.height==1, f"Expected one pinned HingeZero configuration, got {data.height}"
