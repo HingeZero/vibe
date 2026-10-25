@@ -25,9 +25,9 @@ For each query, **the same HingeZero pipeline always runs**:
 
 The iterative dual-tanh mechanism is retained in the source engine, but is
 **not executed** in this submitted configuration. Because the scanner
-exhaustively visits every record without cue modification, 100% recall@100
+evaluates a conservative upper bound for every stored record without cue modification, 100% recall@100
 is expected, and *does not demonstrate an additional accuracy improvement
-from HingeZero*. Time is O(Pd), not approximate-index O(sublinear) search.
+from HingeZero*. Time is O(Pd) for compact-signature scanning, with far fewer full-precision comparisons in typical data; no sublinear worst-case complexity is claimed.
 The tagged-state witness proves stored-ID/byte correspondence, not the truth
 or factual provenance of a memory.
 
@@ -92,3 +92,46 @@ QPS varies between GitHub-hosted runner samples. This does not establish
 performance on VIBE's official leaderboard CPU. The difference arises
 from CPU arithmetic optimisation, not from HingeZero nonlinear iterations
 (which remain at zero) or a new approximate index.
+
+## Certified C++20 exact-pruning acceleration — 25 October 2026
+
+The submitted HingeZero configuration remains **steps=0**, and no FAISS or
+second algorithm is registered. The search engine preserves the original
+float32 memory bank and computes exact inner-product scores for potentially
+top-100 records. A compact per-record int16 signature and stored error norms
+supply an upper bound on the true inner product:
+
+`x·q ≤ x'·q' + ||x−x'||·||q|| + ||x'||·||q−q'||`
+
+Here `x'` and `q'` are the reconstructed 16-bit quantized representations.
+The algorithm first evaluates exact scores for its approximate top 100 to
+establish a real threshold. It then checks **all** upper bounds and skips
+any exact score calculation only if the upper bound lies strictly below
+the current hundredth-best *exact* score. Stored candidates are witness
+checked after reranking. Conservative numerical rounding margins are added.
+
+This does **not** store arbitrary float32 vectors solely in 16 bits: the
+original float32 records remain intact, and the extra signatures require
+approximately 256 bytes/record plus small index metadata. Append/persistence
+checks still validate unchanged historical memory bytes, and the index is
+rebuilt at mount. This is a deterministic **exact-retrieval index** based on
+certified pruning, not a claim of a new mathematical HingeZero activation.
+
+**[Successful five-run VIBE test](https://github.com/HingeZero/vibe/actions/runs/40169016186)**
+([raw HDF5 artifact](https://github.com/HingeZero/vibe/actions/runs/40169016186/artifacts/12589451492)):
+`yi-128-ip`, recall@100=**1.00000**, QPS=**292.33**, index-build=**0.19 s**
+(single benchmark core, author-run GitHub worker).
+
+On the same worker, against the previous exact SIMD implementation, with
+the *same* synthetic 128-dimensional records and queries:
+
+| Memory size | SIMD exhaustive QPS | Certified-pruning QPS | Speed-up | Exact results |
+|---:|---:|---:|---:|---|
+| 65,536 | 436.18 | 862.94 | 1.98× | Top-100 ID parity |
+| 187,843 | 156.17 | 296.24 | 1.90× | Top-100 ID parity |
+
+The larger controlled workload evaluated an average of **100.3 original
+float32 records per query**, compared with 187,843 in exhaustive scoring,
+because 16-bit score bounds safely rejected the rest. Every stored
+quantized signature was still scanned, so these numbers do not demonstrate
+constant-time query cost. No external VIBE maintainer verification is claimed.

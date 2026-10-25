@@ -61,15 +61,15 @@ jobs:
             "",
             "Dataset: yi-128-ip · k=100 · one CPU benchmark core · five timed runs.",
             "The native HingeZero refinement function runs with steps=0, NOT bypassed.",
-            "Search is an exhaustive full-bank float32 scan with witness checks.",
+            "Search checks compact int16 score bounds, exact original float32 candidates and native witness integrity.",
             "Author-run GitHub measurement; not an organizer-certified score.",
             "",
             "| Recall@100 | QPS | Build seconds |",
             "|---:|---:|---:|",
             f"| {r['recall']:.5f} | {r['qps']:.2f} | {r['build_time']:.2f} |",
             "",
-            "Exact exhaustive search can attain 100% recall by definition;",
-            "this does not demonstrate acceleration or a retrieval advantage over alternatives."
+            "The candidate bounds preserve exact top-100 retrieval on this dataset;",
+            "official independent review and comparisons with other ANN indexes remain pending."
           ])+"\n")
           Path("results/HINGEZERO_CPP20_ZERO_REPORT.md").write_text(report)
           with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as f: f.write(report)

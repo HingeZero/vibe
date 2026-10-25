@@ -87,6 +87,94 @@ DotImpl select_dot_ip() {
     return &dot_ip_scalar;
 }
 
+
+// Portable certified 16-bit candidate pruning for real-valued inner products.
+// Unlike a heuristic ANN shortlist, records are omitted only if a Cauchy
+// upper bound proves their exact score cannot beat the current kth record.
+// The original source vector is always used for final exact scoring.
+struct CertifiedIndex {
+  int d;
+  uint64_t n;
+  vector<int16_t> code;
+  vector<double> scales, residual_norm, quant_norm;
+  static constexpr int LIMIT=16383;
+  static double encoding_scale(const float* v,int d) {
+    double hi=0;
+    for(int j=0;j<d;++j)hi=max(hi,abs(double(v[j])));
+    return hi>0 ? hi/LIMIT : 1.0;
+  }
+  static void pack(const float* v,int d,double scale,int16_t*dst,
+                   double *err,double *qnorm) {
+    double err2=0,norm2=0;
+    for(int j=0;j<d;++j) {
+      long long z=llround(double(v[j])/scale);
+      z=max(-static_cast<long long>(LIMIT),min(static_cast<long long>(LIMIT),z));
+      dst[j]=int16_t(z);
+      double approx=double(z)*scale;
+      double delta=double(v[j])-approx;
+      err2+=delta*delta;
+      norm2+=approx*approx;
+    }
+    *err=sqrt(err2);
+    *qnorm=sqrt(norm2);
+  }
+  CertifiedIndex(const float*data,uint64_t count,int width): d(width),n(count) {
+    if(n>SIZE_MAX/size_t(d))throw runtime_error("quantized index too large");
+    code.resize(size_t(n)*d);
+    scales.resize(n);residual_norm.resize(n);quant_norm.resize(n);
+    for(uint64_t i=0;i<n;++i) {
+      const float *src=data+size_t(i)*d;
+      const double s=encoding_scale(src,d);
+      scales[i]=s;
+      pack(src,d,s,code.data()+size_t(i)*d,&residual_norm[i],&quant_norm[i]);
+    }
+  }
+};
+
+int64_t quant_dot_scalar(const int16_t*a,const int16_t*b,int d) {
+  int64_t result=0;
+  for(int j=0;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
+  return result;
+}
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("avx2")))
+int64_t quant_dot_avx2(const int16_t*a,const int16_t*b,int d) {
+    // 4 * (two 16-bit signed products) per 32-bit lane is safe at
+    // max |quantized value|=16383: <= 2,147,221,512, below INT32_MAX.
+    int64_t total=0;
+    int j=0;
+    alignas(32) int32_t sums[8];
+    for(;j+63<d;j+=64) {
+        __m256i sum=_mm256_setzero_si256();
+        for(int step=0;step<4;++step) {
+            auto va=_mm256_loadu_si256(
+              reinterpret_cast<const __m256i*>(a+j+step*16));
+            auto vb=_mm256_loadu_si256(
+              reinterpret_cast<const __m256i*>(b+j+step*16));
+            sum=_mm256_add_epi32(sum,_mm256_madd_epi16(va,vb));
+        }
+        _mm256_store_si256(reinterpret_cast<__m256i*>(sums),sum);
+        for(int lane=0;lane<8;++lane)total+=sums[lane];
+    }
+    for(;j+15<d;j+=16) {
+        auto va=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j));
+        auto vb=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j));
+        auto sum=_mm256_madd_epi16(va,vb);
+        _mm256_store_si256(reinterpret_cast<__m256i*>(sums),sum);
+        for(int lane=0;lane<8;++lane)total+=sums[lane];
+    }
+    for(;j<d;++j)total+=int32_t(a[j])*int32_t(b[j]);
+    return total;
+}
+#endif
+using QuantDot=int64_t(*)(const int16_t*,const int16_t*,int);
+QuantDot choose_quant_dot() {
+#if defined(__x86_64__) && defined(__GNUC__)
+    if(__builtin_cpu_supports("avx2"))return &quant_dot_avx2;
+#endif
+    return &quant_dot_scalar;
+}
+
 struct Record{int32_t id;double score;};
 bool better(const Record&a,const Record&b){
  return a.score!=b.score ? a.score>b.score : a.id<b.id;
@@ -98,6 +186,7 @@ struct Memory{
  uint64_t count;
  size_t bytes;
  vector<Vec> field;
+ unique_ptr<CertifiedIndex> certified;
  Memory(const char*path,uint64_t n,int dimensions,int m,int limit):
    d(dimensions),metric(m),field_limit(limit),count(n){
   if(!path||d<1||d>65536||n<1||n>uint64_t(INT32_MAX)||
@@ -122,6 +211,7 @@ struct Memory{
       for(float x:v)if(!isfinite(x))throw runtime_error("nonfinite field");
       unit(v);field.push_back(std::move(v));
     }
+    if(metric==1)certified=make_unique<CertifiedIndex>(bank,count,d);
   }catch(...){
     if(mapping!=MAP_FAILED)::munmap(mapping,bytes);
     ::close(fd);mapping=MAP_FAILED;fd=-1;throw;
@@ -202,15 +292,59 @@ struct Memory{
          push_heap(heap.begin(),heap.end(),better);
       }
     };
-    if(metric==1) {
-        // VIBE yi-128-ip hot path. Only the exact arithmetic is vectorised:
-        // every memory is still read, scored, and witness-verified.
-        const DotImpl scorer=select_dot_ip();
-        const float* query=q.data();
+    if(metric==1 && certified) {
+        const auto* idx=certified.get();
+        const auto qscale=CertifiedIndex::encoding_scale(q.data(),d);
+        vector<int16_t> qcode(d);
+        double qerr=0,qn_quant=0;
+        CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&qn_quant);
+        const double original_qnorm=nq;
+        const QuantDot approx_dot=choose_quant_dot();
+        const DotImpl exact_dot=select_dot_ip();
+        vector<Record> cheap_top;
+        cheap_top.reserve(k);
+        vector<double> bound(count);
+        const auto approx_consider=[&](Record rec) {
+          if(cheap_top.size()<size_t(k)){
+             cheap_top.push_back(rec);
+             push_heap(cheap_top.begin(),cheap_top.end(),better);
+          }else if(better(rec,cheap_top.front())){
+             pop_heap(cheap_top.begin(),cheap_top.end(),better);
+             cheap_top.back()=rec;
+             push_heap(cheap_top.begin(),cheap_top.end(),better);
+          }
+        };
         for(uint64_t id=0;id<count;++id) {
-            const float* record=bank+size_t(id)*d;
-            consider(Record{int32_t(id),scorer(record,query,d)});
+            const int16_t *row=idx->code.data()+size_t(id)*d;
+            const int64_t intdot=approx_dot(row,qcode.data(),d);
+            const double approximate=double(intdot)*idx->scales[id]*qscale;
+            // Triangle inequality:
+            // x.q - xq.qq = (x-xq).q + xq.(q-qq).
+            // A numerical guard handles float/double rounding.
+            const double error=idx->residual_norm[id]*original_qnorm
+                      +idx->quant_norm[id]*qerr
+                      +1e-7*(1.0+abs(approximate));
+            bound[id]=approximate+error;
+            approx_consider(Record{int32_t(id),approximate});
         }
+        vector<uint8_t> visited(count,0);
+        int32_t exact_evaluations=0;
+        // Establish a legitimate exact score threshold using the highest
+        // approximate-score candidates. This does not assume they are true NN.
+        for(const Record &r:cheap_top) {
+            consider(Record{r.id,exact_dot(bank+size_t(r.id)*d,q.data(),d)});
+            visited[r.id]=1;
+            ++exact_evaluations;
+        }
+        for(uint64_t id=0;id<count;++id) {
+            if(visited[id])continue;
+            if(heap.size()==size_t(k) && bound[id]<heap.front().score)
+                continue; // provably outside exact top-k
+            consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
+            ++exact_evaluations;
+        }
+        // Expose exact evaluation count without changing the C ABI.
+        if(stats)stats[2]=double(exact_evaluations);
     } else {
         for(uint64_t id=0;id<count;++id) {
             consider(Record{int32_t(id),score(bank+size_t(id)*d,q,nq)});
@@ -227,7 +361,7 @@ struct Memory{
     if(stats){
       stats[0]=chrono::duration<double,milli>(t1-t0).count();
       stats[1]=chrono::duration<double,milli>(t2-t1).count();
-      stats[2]=double(k);
+      if(metric!=1)stats[2]=double(count);
     }
  }
 };
