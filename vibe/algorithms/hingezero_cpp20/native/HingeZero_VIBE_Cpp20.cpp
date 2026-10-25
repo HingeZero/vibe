@@ -84,106 +84,94 @@ DotImpl select_dot_ip() {
 
 // Quantized candidate bounds; final scores use the original float32 vectors.
 struct CertifiedIndex {
-  int d;
+  int d,blocks;
   uint64_t n;
-  vector<int8_t> code;
-  vector<double> scales, residual_norm, quant_norm;
-  static constexpr int LIMIT=127;
-  static double encoding_scale(const float* v,int d) {
-    double hi=0;
-    for(int j=0;j<d;++j)hi=max(hi,abs(double(v[j])));
-    return hi>0 ? hi/LIMIT : 1.0;
-  }
-  static void pack(const float* v,int d,double scale,int8_t*dst,
-                   double *err,double *qnorm) {
-    double err2=0,norm2=0;
-    for(int j=0;j<d;++j) {
-      long long z=llround(double(v[j])/scale);
-      z=max(-static_cast<long long>(LIMIT),min(static_cast<long long>(LIMIT),z));
-      dst[j]=int8_t(z);
-      double approx=double(z)*scale;
-      double delta=double(v[j])-approx;
-      err2+=delta*delta;
-      norm2+=approx*approx;
+  vector<uint64_t> low,high;
+  vector<uint32_t> digits;
+  vector<double> origins,scales,residual_norm,quant_norm;
+  static void range(const float*src,int d,double*origin,double*scale) {
+    double lo=src[0],hi=src[0];
+    for(int j=1;j<d;++j) {
+      lo=min(lo,double(src[j]));
+      hi=max(hi,double(src[j]));
     }
-    *err=sqrt(err2);
-    *qnorm=sqrt(norm2);
+    *origin=lo;
+    *scale=hi>lo ? (hi-lo)/3.0 : 1.0;
   }
-  CertifiedIndex(const float*data,uint64_t count,int width): d(width),n(count) {
-    if(n>SIZE_MAX/size_t(d))throw runtime_error("quantized index too large");
-    code.resize(size_t(n)*d);
-    scales.resize(n);residual_norm.resize(n);quant_norm.resize(n);
+  static void pack(const float*src,int d,double origin,double scale,
+                   uint64_t*low,uint64_t*high,uint32_t*digits,
+                   double*residual,double*quantized) {
+    double er=0,qn=0;
+    uint32_t sum=0;
+    const int blocks=(d+63)/64;
+    fill(low,low+blocks,uint64_t(0));
+    fill(high,high+blocks,uint64_t(0));
+    for(int j=0;j<d;++j) {
+      long long z=llround((double(src[j])-origin)/scale);
+      z=max(0LL,min(3LL,z));
+      const uint64_t mask=uint64_t(1)<<(j&63);
+      if(z&1)low[j>>6]|=mask;
+      if(z&2)high[j>>6]|=mask;
+      sum+=uint32_t(z);
+      const double approximation=origin+scale*double(z);
+      const double e=double(src[j])-approximation;
+      er+=e*e;
+      qn+=approximation*approximation;
+    }
+    *digits=sum;
+    *residual=sqrt(er);
+    *quantized=sqrt(qn);
+  }
+  CertifiedIndex(const float*bank,uint64_t count,int width):
+    d(width),blocks((width+63)/64),n(count) {
+    if(n>SIZE_MAX/size_t(blocks))throw runtime_error("two-bit index too large");
+    low.resize(size_t(n)*blocks);
+    high.resize(size_t(n)*blocks);
+    digits.resize(n);
+    origins.resize(n);
+    scales.resize(n);
+    residual_norm.resize(n);
+    quant_norm.resize(n);
     for(uint64_t i=0;i<n;++i) {
-      const float *src=data+size_t(i)*d;
-      const double s=encoding_scale(src,d);
-      scales[i]=s;
-      pack(src,d,s,code.data()+size_t(i)*d,&residual_norm[i],&quant_norm[i]);
+      const float*src=bank+size_t(i)*d;
+      range(src,d,&origins[i],&scales[i]);
+      pack(src,d,origins[i],scales[i],
+           low.data()+size_t(i)*blocks,high.data()+size_t(i)*blocks,
+           &digits[i],&residual_norm[i],&quant_norm[i]);
     }
   }
 };
-
-
-int64_t quant_dot_scalar(const int8_t*a,const int8_t*b,int d) {
-  int64_t result=0;
-  for(int j=0;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
-  return result;
-}
-#if defined(__x86_64__) && defined(__GNUC__)
-__attribute__((target("avx2")))
-int64_t quant_dot_avx2(const int8_t*a,const int8_t*b,int d) {
-  // Widen signed int8 to signed int16 before pairwise multiply-add.
-  // This avoids saturation that can occur with unsigned/signed pmaddubsw.
-  __m256i acc=_mm256_setzero_si256();
-  int j=0;
-  for(;j+31<d;j+=32){
-     const __m128i a0=_mm_loadu_si128(reinterpret_cast<const __m128i*>(a+j));
-     const __m128i a1=_mm_loadu_si128(reinterpret_cast<const __m128i*>(a+j+16));
-     const __m128i b0=_mm_loadu_si128(reinterpret_cast<const __m128i*>(b+j));
-     const __m128i b1=_mm_loadu_si128(reinterpret_cast<const __m128i*>(b+j+16));
-     const __m256i v0=_mm256_madd_epi16(
-         _mm256_cvtepi8_epi16(a0),_mm256_cvtepi8_epi16(b0));
-     const __m256i v1=_mm256_madd_epi16(
-         _mm256_cvtepi8_epi16(a1),_mm256_cvtepi8_epi16(b1));
-     acc=_mm256_add_epi32(acc,_mm256_add_epi32(v0,v1));
+int64_t digit_dot_scalar(const uint64_t*al,const uint64_t*ah,
+                         const uint64_t*bl,const uint64_t*bh,int blocks) {
+  int64_t sum=0;
+  for(int i=0;i<blocks;++i) {
+    sum+=int64_t(std::popcount(al[i]&bl[i]));
+    sum+=2LL*std::popcount(al[i]&bh[i]);
+    sum+=2LL*std::popcount(ah[i]&bl[i]);
+    sum+=4LL*std::popcount(ah[i]&bh[i]);
   }
-  alignas(32) int32_t lanes[8];
-  _mm256_store_si256(reinterpret_cast<__m256i*>(lanes),acc);
-  int64_t total=0;
-  for(int lane=0;lane<8;++lane)total+=lanes[lane];
-  for(;j<d;++j)total+=int32_t(a[j])*int32_t(b[j]);
-  return total;
+  return sum;
+}
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((target("popcnt")))
+int64_t digit_dot_popcnt(const uint64_t*al,const uint64_t*ah,
+                         const uint64_t*bl,const uint64_t*bh,int blocks) {
+  int64_t sum=0;
+  for(int i=0;i<blocks;++i) {
+    sum+=int64_t(__builtin_popcountll(al[i]&bl[i]));
+    sum+=2LL*__builtin_popcountll(al[i]&bh[i]);
+    sum+=2LL*__builtin_popcountll(ah[i]&bl[i]);
+    sum+=4LL*__builtin_popcountll(ah[i]&bh[i]);
+  }
+  return sum;
 }
 #endif
+using DigitDot=int64_t(*)(const uint64_t*,const uint64_t*,const uint64_t*,const uint64_t*,int);
+DigitDot choose_digit_dot() {
 #if defined(__x86_64__) && defined(__GNUC__)
-__attribute__((target("avx512f,avx512bw")))
-int64_t quant_dot_avx512(const int8_t*a,const int8_t*b,int d){
-   __m512i sum=_mm512_setzero_si512();
-   int j=0;
-   for(;j+63<d;j+=64){
-      auto a0=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j));
-      auto b0=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j));
-      auto a1=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a+j+32));
-      auto b1=_mm256_loadu_si256(reinterpret_cast<const __m256i*>(b+j+32));
-      sum=_mm512_add_epi32(sum,_mm512_madd_epi16(
-         _mm512_cvtepi8_epi16(a0),_mm512_cvtepi8_epi16(b0)));
-      sum=_mm512_add_epi32(sum,_mm512_madd_epi16(
-         _mm512_cvtepi8_epi16(a1),_mm512_cvtepi8_epi16(b1)));
-   }
-   alignas(64) int32_t lane[16];
-   _mm512_store_si512(reinterpret_cast<__m512i*>(lane),sum);
-   int64_t result=0;
-   for(int i=0;i<16;++i)result+=lane[i];
-   for(;j<d;++j)result+=int32_t(a[j])*int32_t(b[j]);
-   return result;
-}
+  if(__builtin_cpu_supports("popcnt"))return &digit_dot_popcnt;
 #endif
-using QuantDot=int64_t(*)(const int8_t*,const int8_t*,int);
-QuantDot choose_quant_dot(){
-#if defined(__x86_64__) && defined(__GNUC__)
-  if(__builtin_cpu_supports("avx512bw"))return &quant_dot_avx512;
-  if(__builtin_cpu_supports("avx2"))return &quant_dot_avx2;
-#endif
-  return &quant_dot_scalar;
+  return &digit_dot_scalar;
 }
 
 struct Record{int32_t id;double score;};
@@ -298,12 +286,15 @@ struct Memory{
     };
     if(metric==1 && certified) {
         const auto* idx=certified.get();
-        const auto qscale=CertifiedIndex::encoding_scale(q.data(),d);
-        vector<int8_t> qcode(d);
+        double qorigin=0,qscale=0;
+        CertifiedIndex::range(q.data(),d,&qorigin,&qscale);
+        vector<uint64_t> qlow(idx->blocks),qhigh(idx->blocks);
+        uint32_t qdigits=0;
         double qerr=0,qn_quant=0;
-        CertifiedIndex::pack(q.data(),d,qscale,qcode.data(),&qerr,&qn_quant);
+        CertifiedIndex::pack(q.data(),d,qorigin,qscale,
+           qlow.data(),qhigh.data(),&qdigits,&qerr,&qn_quant);
         const double original_qnorm=nq;
-        const QuantDot approx_dot=choose_quant_dot();
+        const DigitDot digit_dot=choose_digit_dot();
         const DotImpl exact_dot=select_dot_ip();
         vector<Record> cheap_top;
         cheap_top.reserve(k);
@@ -319,9 +310,15 @@ struct Memory{
           }
         };
         for(uint64_t id=0;id<count;++id) {
-            const int8_t *row=idx->code.data()+size_t(id)*d;
-            const int64_t intdot=approx_dot(row,qcode.data(),d);
-            const double approximate=double(intdot)*idx->scales[id]*qscale;
+            const auto row=size_t(id)*idx->blocks;
+            const int64_t sum=digit_dot(
+              idx->low.data()+row,idx->high.data()+row,
+              qlow.data(),qhigh.data(),idx->blocks);
+            const double approximate=
+              double(d)*idx->origins[id]*qorigin
+              +idx->origins[id]*qscale*qdigits
+              +qorigin*idx->scales[id]*idx->digits[id]
+              +idx->scales[id]*qscale*double(sum);
             // Cauchy bound includes record/query quantization error.
             const double error=idx->residual_norm[id]*original_qnorm
                       +idx->quant_norm[id]*qerr
