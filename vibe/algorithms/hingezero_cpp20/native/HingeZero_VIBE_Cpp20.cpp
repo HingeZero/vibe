@@ -372,6 +372,35 @@ int hz20_verify(void*handle,int64_t id,const float*state)noexcept{
   return static_cast<Memory*>(handle)->verify(id,state)?1:0;
 }
 void hz20_close(void*handle)noexcept{delete static_cast<Memory*>(handle);}
+int hz20_query_candidates(void*handle,const float*q,int32_t k,
+                          const int32_t*ids,int32_t num_ids,int32_t*out)noexcept {
+ try {
+  if(!handle||!q||!ids||!out||k<1||num_ids<k)
+   throw runtime_error("invalid candidate query");
+  const auto*mem=static_cast<const Memory*>(handle);
+  if(mem->metric!=1)throw runtime_error("candidate query requires IP");
+  const DotImpl exact=select_dot_ip();
+  vector<Record> heap;heap.reserve(k);
+  for(int32_t i=0;i<num_ids;++i) {
+   const int32_t id=ids[i];
+   if(id<0||uint64_t(id)>=mem->count)throw runtime_error("invalid candidate ID");
+   Record cand{id,exact(mem->bank+size_t(id)*mem->d,q,mem->d)};
+   if(heap.size()<size_t(k)){heap.push_back(cand);push_heap(heap.begin(),heap.end(),better);}
+   else if(better(cand,heap.front())){
+      pop_heap(heap.begin(),heap.end(),better);
+      heap.back()=cand;push_heap(heap.begin(),heap.end(),better);
+   }
+  }
+  sort(heap.begin(),heap.end(),better);
+  for(int32_t i=0;i<k;++i){
+    out[i]=heap[i].id;
+    Vec tagged(mem->bank+size_t(out[i])*mem->d,
+               mem->bank+size_t(out[i]+1)*mem->d);
+    if(!mem->verify(out[i],tagged.data()))throw runtime_error("witness rejected");
+  }
+  return 0;
+ }catch(const exception&ex){last_error=ex.what();return -1;}
+}
 int hz20_append(const char*path,uint64_t previous,int dimension,
                 const float*values,uint64_t extra)noexcept{
  try{

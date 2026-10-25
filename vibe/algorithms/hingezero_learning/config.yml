@@ -1,0 +1,18 @@
+float:
+  ip:
+    - name: hingezero-learned
+      module: vibe.algorithms.hingezero_learning.module
+      constructor: HingeZeroLearnedRouting
+      singularity_image: hingezero_cpp20
+      disabled: false
+      gpu: false
+      ood: true
+      base_args: ['@metric']
+      run_groups:
+        supervised-query-routing:
+          args:
+            graph_degree: [24]
+            build_ef: [120]
+          query_args:
+            references: [16, 64, 256, 400]
+            search_ef: [400]
