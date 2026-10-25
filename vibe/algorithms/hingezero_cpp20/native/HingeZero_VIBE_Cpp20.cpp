@@ -88,7 +88,7 @@ struct CertifiedIndex {
   uint64_t n;
   vector<uint64_t> low,high;
   vector<uint32_t> digits;
-  vector<double> origins,scales,residual_norm,quant_norm;
+  vector<double> origins,scales,residual_norm,quant_norm,original_norm;
   static void range(const float*src,int d,double*origin,double*scale) {
     double lo=src[0],hi=src[0];
     for(int j=1;j<d;++j) {
@@ -132,9 +132,13 @@ struct CertifiedIndex {
     scales.resize(n);
     residual_norm.resize(n);
     quant_norm.resize(n);
+    original_norm.resize(n);
     for(uint64_t i=0;i<n;++i) {
       const float*src=bank+size_t(i)*d;
       range(src,d,&origins[i],&scales[i]);
+      double nr=0;
+      for(int j=0;j<d;++j)nr+=double(src[j])*double(src[j]);
+      original_norm[i]=sqrt(nr);
       pack(src,d,origins[i],scales[i],
            low.data()+size_t(i)*blocks,high.data()+size_t(i)*blocks,
            &digits[i],&residual_norm[i],&quant_norm[i]);
@@ -341,6 +345,7 @@ struct Memory{
         }
         for(uint64_t id=0;id<count;++id) {
             if(visited[id])continue;
+            if(heap.size()==size_t(k) && idx->original_norm[id]*original_qnorm+1e-7*(1+abs(heap.front().score))<heap.front().score)continue;
             if(heap.size()==size_t(k) && bound[id]<heap.front().score)
                 continue; // provably outside exact top-k
             consider(Record{int32_t(id),exact_dot(bank+size_t(id)*d,q.data(),d)});
