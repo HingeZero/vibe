@@ -229,7 +229,7 @@ class WitnessedState:
 class RetainingSession:
     """Optional sequential memory interface; NOT shared between VIBE queries."""
     def __init__(self, backend, state, drift_boundary=0.15, commit_margin=0.10):
-        if not backend.verify(state.record_id, state.vector):
+        if not backend.witness(state.record_id, state.vector):
             raise ValueError("Unverified initial checkpoint")
         self.backend = backend
         self.checkpoint = state
