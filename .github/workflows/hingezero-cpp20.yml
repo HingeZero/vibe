@@ -43,11 +43,11 @@ jobs:
           test -s "$HINGEZERO_CPP20_LIB"
       - name: Confirm original C++20 parity, append, native witness, all four VIBE metrics
         run: python verification/smoke_hingezero_cpp20.py
-      - name: VIBE yi-128-ip original C++20 HingeZero and full-scan baseline
+      - name: VIBE yi-128-ip C++20 HingeZero (0 and 8 iterations)
         run: |
           python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero-cpp20-refined --count 100
           python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero-cpp20-anchored --count 100
-          python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero-cpp20-raw --count 100
+          python run.py --local --force --runs 1 --parallelism 1 --dataset yi-128-ip --algorithm hingezero-cpp20-zero --count 100
       - name: Export validated official VIBE recall@100 and QPS
         run: |
           python export_results.py --parallelism 1 --skip-pca-mahalanobis
@@ -56,7 +56,7 @@ jobs:
           from pathlib import Path
           import polars as pl
           d=pl.read_parquet("results/summary.parquet")
-          d=d.filter(pl.col("algorithm").is_in(["hingezero-cpp20-refined","hingezero-cpp20-anchored","hingezero-cpp20-raw"]))
+          d=d.filter(pl.col("algorithm").is_in(["hingezero-cpp20-refined","hingezero-cpp20-anchored","hingezero-cpp20-zero"]))
           assert d.height==3, f"Expected three C++20 official result rows; got {d.height}"
           lines=[
               "# HingeZero original C++20 VIBE floating-vector adaptation",
@@ -73,7 +73,8 @@ jobs:
               assert 0<=row["recall"]<=1 and row["qps"]>0
               lines.append(f"| {row['algorithm']} | {row['recall']:.5f} | {row['qps']:.2f} | {row['build_time']:.2f} |")
           lines.extend(["",
-              "Raw control is an **exact exhaustive search** against the unaltered query;",
+              "Zero-step control invokes the same native HingeZero refine/query/witness pathway;",
+              "zero iterations leave x_0 unmodified and still exhaustively scan the stored bank.",
               "the C++20 HingeZero engine scans every original vector using its refined cue.",
               "The anchored mode is an explicit 95% original / 5% refined real-vector adaptation.",
               "Any drop in recall is genuine VIBE disagreement with the refined cue.",

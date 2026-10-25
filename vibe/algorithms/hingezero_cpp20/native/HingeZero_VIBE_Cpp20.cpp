@@ -89,6 +89,10 @@ struct Memory{
    if(!cue||steps<0||steps>64)throw runtime_error("invalid refinement");
    Vec x(cue,cue+d);
    for(float a:x)if(!isfinite(a))throw runtime_error("nonfinite cue");
+   // Zero-step HingeZero: x_0 is returned unchanged. We still enter the
+   // same native refine/query/witness pipeline, but execute no iteration.
+   // This is not the separate enabled==0 "raw" bypass.
+   if(steps==0)return x;
    unit(x);
    if(dot(x.data(),x.data(),d)<1e-15f){
      Vec avg(d,0);
@@ -131,14 +135,14 @@ struct Memory{
     Vec q;
     if(enabled){
        q=refine(original,steps);
-       if(enabled==2) {
+       if(enabled==2 && steps>0) {
           // VIBE adaptation only: preserve most original-query evidence.
           // The original binary kernel (enabled==1) remains untouched.
           Vec anchor(original,original+d); unit(anchor);
           for(int j=0;j<d;++j)q[j]=0.95f*anchor[j]+0.05f*q[j];
           unit(q);
        }
-       if(metric==0){
+       if(metric==0 && steps>0){
          double a=0;for(int j=0;j<d;++j)a+=double(original[j])*original[j];
          for(float&v:q)v*=float(sqrt(a));
        }
