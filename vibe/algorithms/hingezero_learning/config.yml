@@ -1,7 +1,7 @@
 float:
   ip:
     - name: hingezero-learned
-      module: vibe.algorithms.hingezero_learning.module
+      module: vibe.algorithms.hingezero_learning
       constructor: HingeZeroLearnedRouting
       singularity_image: hingezero_cpp20
       disabled: false
