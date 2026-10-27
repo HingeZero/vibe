@@ -449,4 +449,33 @@ int hz20_append(const char*path,uint64_t previous,int dimension,
    return 0;
  }catch(const exception&ex){last_error=ex.what();return -1;}
 }
+int hz20_rank_subset(void*handle,const float*q,const int32_t*input,int n,int k,int32_t*out)noexcept{
+ try{
+  if(!handle||!q||!input||!out||n<1||k<1||k>n)throw runtime_error("invalid subset");
+  auto*m=static_cast<Memory*>(handle);
+  if(m->metric!=1)throw runtime_error("subset supports inner product");
+  Vec cue(q,q+m->d);
+  for(float v:cue)if(!isfinite(v))throw runtime_error("nonfinite query");
+  vector<Record> scored;
+  scored.reserve(n);
+  for(int i=0;i<n;++i){
+   const int32_t id=input[i];
+   if(id<0||uint64_t(id)>=m->count)throw runtime_error("invalid candidate");
+   double score=0;
+   const float*record=m->bank+size_t(id)*m->d;
+   for(int j=0;j<m->d;++j)score+=double(record[j])*double(cue[j]);
+   scored.push_back(Record{id,score});
+  }
+  if(k<n)nth_element(scored.begin(),scored.begin()+k,scored.end(),better);
+  scored.resize(k);
+  sort(scored.begin(),scored.end(),better);
+  for(int i=0;i<k;++i){
+   int32_t id=scored[i].id;
+   if(!m->verify(id,m->bank+size_t(id)*m->d))throw runtime_error("witness rejected");
+   if(i>0&&id==scored[i-1].id)throw runtime_error("duplicate candidate");
+   out[i]=id;
+  }
+  return 0;
+ }catch(const exception&ex){last_error=ex.what();return -1;}
+}
 }
