@@ -12,3 +12,18 @@ Configuration | Recall@100 | Queries/s
 
 Two-step refinement reduced recall by 0.0322333 absolute and query throughput by roughly 14.3% in this run.
 Build time was 4.367 seconds. Results are for one parameter choice, one host run, 300 of the dataset's queries, and do not establish official VIBE leaderboard standing. This negative result is retained as recorded, not replaced by favorable synthetic measurements. Follow official VIBE benchmarking instructions for full hardware-controlled comparison.
+
+
+## Second standard VIBE dataset: llama-128-ip
+
+Data: official llama-128-ip.hdf5 (SHA256 43c6a366d1e7dfd9e331e712708a664f91f8dbda1928c9923ef730d6718a2f52).
+Size: 256,921 vectors x 128 dimensions; 300 queries, first test rows; inner product; recall@100.
+The same nlist=512, nprobe=16, 4x candidate pool, alpha=0.25, epsilon=0.10, lambda=0.02, blend=0.2 and single-core host configuration.
+Source run: https://github.com/HingeZero/vibe/actions/runs/40493021020
+
+Configuration | Recall@100 | Queries/s
+--- | --- | ---
+0-step control | 0.6671667 | 4304.050
+2-step HingeZero | 0.5938667 | 3637.799
+
+HingeZero lowered recall by 0.0733 absolute and query throughput by approximately 15.5% on this configuration. A stronger baseline or different geometry may improve the results, but the two measured trials do not support an improvement claim. Both source JSON files are in results/ and are reproducible from scripts/bench_hz_official.py.
