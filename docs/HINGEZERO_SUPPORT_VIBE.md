@@ -52,3 +52,19 @@ run `.github/workflows/hz-support-vibe.yml`.
 This is the **single** HingeZero method proposed in PR #16 and it does not
 assert independent acceptance, a leaderboard ranking, or a speed advantage
 over methods that use the full corpus without a learned restricted pool.
+
+
+## Single-method PR rerun (source unchanged)
+
+A fresh run after consolidating upstream PR #16 to this one configuration succeeded:
+https://github.com/HingeZero/vibe/actions/runs/40495156042
+
+- `yi-128-ip`, `pool_size=32768`, refinement steps **0**
+- Recall@100: **98.617%**
+- Query throughput on that run: **2,202.23695 QPS**
+- Original prior run: **5,010.82659 QPS** at the same recall and code provenance.
+
+The single-source implementation was not tuned or modified to achieve these
+numbers. The QPS value varies materially across shared GitHub Actions runs;
+the original 5,011 QPS must not be represented as a guaranteed repeated
+throughput or an independently verified official leaderboard score.
