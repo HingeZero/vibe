@@ -6,6 +6,7 @@ From: base.sif
 
 %post
   set -eu
+  mkdir -p /opt/hingezero_cpp20
   g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off /opt/hingezero_indexed/HingeZero_VIBE_Cpp20.cpp -o /opt/hingezero_cpp20/libhz20.so
 
 %environment
