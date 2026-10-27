@@ -1,0 +1,16 @@
+float:
+  any:
+    - name: hingezero-indexed-lab
+      module: vibe.algorithms.hingezero_indexed
+      constructor: HingeZeroIndexed
+      singularity_image: hingezero_indexed
+      disabled: false
+      gpu: false
+      ood: false
+      base_args: ['@metric']
+      run_groups:
+        indexed-experiment:
+          args:
+            centroid_count: [128]
+          query_args:
+            probes: [4, 8, 16, 32, 64, 128]
