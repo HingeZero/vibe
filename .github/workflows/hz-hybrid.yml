@@ -1,0 +1,32 @@
+name: HingeZero hybrid exact-plus-learned study
+on:
+  push:
+    branches:
+      - hingezero-query-aware-mips-20261027
+    paths:
+      - .github/workflows/hz-hybrid.yml
+      - verification/benchmark_hingezero_hybrid_yi.py
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  study:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      PYTHONPATH: "."
+      HINGEZERO_CPP20_LIB: /tmp/libhz20.so
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install numpy==2.4.4 h5py==3.16.0 faiss-cpu==1.12.0 psutil==7.2.2
+      - run: g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off vibe/algorithms/hingezero_cpp20/native/HingeZero_VIBE_Cpp20.cpp -o /tmp/libhz20.so
+      - run: |
+          mkdir -p data
+          curl -fsSL --retry 2 --connect-timeout 15 --max-time 210 -o data/yi-128-ip.hdf5 https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/yi-128-ip.hdf5
+      - run: python -u verification/benchmark_hingezero_hybrid_yi.py
