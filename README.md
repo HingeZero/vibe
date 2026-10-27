@@ -268,6 +268,7 @@ Deprecated datasets will remain available, but their benchmark results will not 
 | [Glass](https://github.com/zilliztech/pyglass) | git+d2296ec |
 | [HNSW-RaBitQ](https://github.com/VectorDB-NTU/RaBitQ-Library) | 0.3.7 |
 | [HNSW](https://github.com/nmslib/hnswlib) | 0.8.0 |
+| [HingeZero-IVF (experimental)](README-HINGEZERO.md) | 0.1 (candidate field 2-step) |
 | [IVF (Faiss)](https://github.com/facebookresearch/faiss) | 1.14.3 |
 | [IVF-PQ (Faiss)](https://github.com/facebookresearch/faiss) | 1.14.3 |
 | [IVF-RaBitQ](https://github.com/VectorDB-NTU/RaBitQ-Library) | 0.3.7 |

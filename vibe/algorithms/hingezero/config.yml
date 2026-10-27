@@ -1,0 +1,19 @@
+float:
+  any:
+    - name: hingezero-ivf
+      module: vibe.algorithms.hingezero
+      constructor: HingeZeroIVF
+      singularity_image: hingezero
+      disabled: false
+      gpu: false
+      ood: false
+      base_args: ['@metric']
+      run_groups:
+        default:
+          args:
+            n_list: [256, 512]
+            candidate_multiplier: [2, 4]
+          query_args:
+            n_probe: [8, 16, 32]
+            steps: [0, 2]
+            blend: [0.2]
