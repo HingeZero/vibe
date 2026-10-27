@@ -1,0 +1,18 @@
+float:
+  ip:
+    - name: hingezero-graph-lab
+      module: vibe.algorithms.hingezero_graph
+      constructor: HingeZeroGraph
+      singularity_image: hingezero_graph
+      disabled: false
+      gpu: false
+      ood: false
+      base_args: ['@metric']
+      run_groups:
+        graph:
+          args:
+            m: [24]
+            ef_construction: [120]
+          query_args:
+            ef_search: [240, 480, 960, 1920]
+            rerank_budget: [240, 480, 960, 1920]
