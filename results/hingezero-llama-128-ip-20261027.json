@@ -1,0 +1,42 @@
+{
+  "protocol": "offline VIBE-dataset-compatible comparison; not official VIBE leaderboard",
+  "date": "2026-10-27",
+  "dataset": "llama-128-ip.hdf5",
+  "dataset_sha256": "43c6a366d1e7dfd9e331e712708a664f91f8dbda1928c9923ef730d6718a2f52",
+  "train_rows": 256921,
+  "dimension": 128,
+  "query_rows": 300,
+  "metric": "ip",
+  "k": 100,
+  "build_seconds": 4.048968624999993,
+  "nlist": 512,
+  "nprobe": 16,
+  "candidate_multiplier": 4,
+  "alpha": 0.25,
+  "eps": 0.1,
+  "lam": 0.02,
+  "blend": 0.2,
+  "cpu": "",
+  "platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.43",
+  "python": "3.11.17",
+  "numpy": "1.26.4",
+  "faiss": "1.12.0",
+  "source_action_run": "https://github.com/HingeZero/vibe/actions/runs/40493021020",
+  "head_sha": "c183b2d9b9eb1198a4e96304530a67acf9dabc08",
+  "results": [
+    {
+      "steps": 0,
+      "recall_at_k": 0.6671666666666667,
+      "qps": 4304.050030736434,
+      "total_queries": 300,
+      "elapsed_seconds": 0.06970179200000359
+    },
+    {
+      "steps": 2,
+      "recall_at_k": 0.5938666666666667,
+      "qps": 3637.7988692775543,
+      "total_queries": 300,
+      "elapsed_seconds": 0.08246745099999941
+    }
+  ]
+}
