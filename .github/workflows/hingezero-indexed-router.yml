@@ -1,0 +1,33 @@
+name: HingeZero indexed router smoke
+
+on:
+  push:
+    branches:
+      - hingezero-indexed-router-lab-20261027
+    paths:
+      - .github/workflows/hingezero-indexed-router.yml
+      - vibe/algorithms/hingezero_indexed/**
+      - verification/smoke_hingezero_indexed.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  indexed-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      NUMBA_NUM_THREADS: "1"
+      HINGEZERO_CPP20_LIB: /tmp/libhz20.so
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install numpy==2.4.4 numba==0.65.1 psutil
+      - run: g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off vibe/algorithms/hingezero_cpp20/native/HingeZero_VIBE_Cpp20.cpp -o /tmp/libhz20.so
+      - run: python verification/smoke_hingezero_indexed.py
