@@ -133,8 +133,9 @@ class HingeZeroIndexed(HingeZeroCpp20):
         )
         if len(ids) < k:
             raise RuntimeError("Insufficient candidates")
-        selected = np.argpartition(-scores, k - 1)[:k] if k < len(ids) else np.arange(k)
-        ranked = np.lexsort((ids[selected], -scores[selected]))
+        cutoff = np.partition(scores, len(scores) - k)[len(scores) - k]
+        selected = np.flatnonzero(scores >= cutoff)
+        ranked = np.lexsort((ids[selected], -scores[selected]))[:k]
         result = ids[selected[ranked]]
         if len(np.unique(result)) != k:
             raise RuntimeError("Duplicate results")
