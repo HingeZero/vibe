@@ -30,12 +30,13 @@ jobs:
       - run: |
           mkdir -p data
           curl -fsSL --retry 2 --connect-timeout 15 --max-time 210 -o data/yi-128-ip.hdf5 https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/yi-128-ip.hdf5
+      - run: python run.py --local --force --runs 2 --parallelism 1 --dataset yi-128-ip --algorithm hingezero --count 100
       - run: python run.py --local --force --runs 2 --parallelism 1 --dataset yi-128-ip --algorithm hingezero-support-lab --count 100
       - run: |
           python export_results.py --parallelism 1 --skip-pca-mahalanobis
           python - <<'PY'
           import polars as pl
-          t=pl.read_parquet("results/summary.parquet").filter(pl.col("algorithm")=="hingezero-support-lab")
+          t=pl.read_parquet("results/summary.parquet").filter(pl.col("algorithm").is_in(["hingezero-support-lab", "hingezero"]))
           for x in t.to_dicts():
               print("HZ_SUPPORT_OFFICIAL_FORMAT", x, flush=True)
           PY
