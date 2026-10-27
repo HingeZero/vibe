@@ -7,8 +7,11 @@ on:
     paths:
       - .github/workflows/hingezero-indexed-router.yml
       - vibe/algorithms/hingezero_indexed/**
+      - vibe/algorithms/hingezero_graph/**
+      - vibe/algorithms/hingezero_cpp20/native/HingeZero_VIBE_Cpp20.cpp
       - verification/smoke_hingezero_indexed.py
       - verification/benchmark_hingezero_graph_pilot.py
+      - verification/smoke_hingezero_graph.py
   workflow_dispatch:
 
 permissions:
@@ -34,3 +37,4 @@ jobs:
       - run: g++ -O3 -std=c++20 -fPIC -shared -DNDEBUG -ffp-contract=off vibe/algorithms/hingezero_cpp20/native/HingeZero_VIBE_Cpp20.cpp -o /tmp/libhz20.so
       - run: python verification/smoke_hingezero_indexed.py
       - run: python verification/benchmark_hingezero_graph_pilot.py
+      - run: python verification/smoke_hingezero_graph.py
