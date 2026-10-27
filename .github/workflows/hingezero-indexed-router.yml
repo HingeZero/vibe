@@ -22,6 +22,7 @@ jobs:
       OPENBLAS_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
       NUMBA_NUM_THREADS: "1"
+      PYTHONPATH: "."
       HINGEZERO_CPP20_LIB: /tmp/libhz20.so
     steps:
       - uses: actions/checkout@v4
