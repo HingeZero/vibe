@@ -37,6 +37,14 @@ The independent OOD learning split's ground-truth neighbor IDs were used in
 training the search-support pool, per VIBE's documented `fit_ood` interface.
 **Test query labels are never used to build the pool.**
 
+## Submission clarification — 30 October 2026
+
+**This is a VIBE submission, not a NeurIPS Big ANN `openai-100K` leaderboard result.** The previously reported 5,010.826592 QPS / 98.617% recall@100 belongs to VIBE's **`yi-128-ip`** test, using a restricted learned 32,768-vector support pool. It is neither a full-corpus general-purpose result nor an `openai-100K` result. The same configuration reproduced 98.617% recall at lower throughput on other shared runners.
+
+The separate [Big ANN PR #352](https://github.com/harsha-simhadri/big-ann-benchmarks/pull/352) reports a different implementation and evaluation: `openai-100K` recall@10 **0.914250**, **165.889364 QPS**, four threads, eight refinement steps. **Do not substitute either test's QPS/recall for the other.**
+
+**Review request:** This VIBE method builds a support subset from the independent OOD learning split's provided neighbour labels. It does not use test labels. Maintainers should assess whether this training mechanism and restricted-pool search qualify for inclusion under the intended VIBE leaderboard comparison; the score is not certified until reviewed and evaluated on reference hardware.
+
 ## Reproduce
 
 Build the HingeZero support image using VIBE's container method:
